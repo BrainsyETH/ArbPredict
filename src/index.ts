@@ -3,10 +3,15 @@ import { getConfig } from './config/index.js';
 import { getStateManager } from './core/state.js';
 import { getCircuitBreaker } from './core/circuit-breaker.js';
 import { getTelegramAlerter } from './core/alerts.js';
+import { getEventMatcher } from './core/event-matcher.js';
+import { getArbitrageDetector } from './core/arbitrage-detector.js';
+import { getExecutionEngine } from './core/execution-engine.js';
+import { getRiskManager } from './core/risk-manager.js';
 import { getPolymarketConnector } from './connectors/polymarket/index.js';
+import { getKalshiConnector } from './connectors/kalshi/index.js';
 import { testConnection as testDbConnection, closePool } from './db/index.js';
 import { createChildLogger } from './utils/logger.js';
-import { formatUsd } from './utils/helpers.js';
+import { formatUsd, sleep, round } from './utils/helpers.js';
 
 const logger = createChildLogger('main');
 
@@ -22,17 +27,27 @@ const CLI_COMMANDS: Record<string, string> = {
   'resume': 'Resume trading (clear circuit breaker)',
   'dry-run': 'Switch to dry run mode',
   'live': 'Switch to live mode (requires confirmation)',
+  'scan': 'Scan for arbitrage opportunities',
+  'mappings': 'Show active event mappings',
   'opportunities': 'Show current arbitrage opportunities',
   'config': 'Show current configuration',
   'help': 'Show available commands',
   'quit': 'Exit the bot',
 };
 
+// Bot loop control
+let botRunning = false;
+let scanInterval: NodeJS.Timer | null = null;
+
 async function handleCommand(command: string, args: string[]): Promise<string> {
   const config = getConfig();
   const stateManager = getStateManager();
   const circuitBreaker = getCircuitBreaker();
   const polymarketConnector = getPolymarketConnector();
+  const kalshiConnector = getKalshiConnector();
+  const eventMatcher = getEventMatcher();
+  const arbitrageDetector = getArbitrageDetector();
+  const riskManager = getRiskManager();
 
   switch (command) {
     case 'status': {
@@ -54,13 +69,16 @@ Bot Status:
     case 'health': {
       const polyConnected = polymarketConnector.isConnected();
       const polyWsConnected = polymarketConnector.isWebSocketConnected();
+      const kalshiConnected = kalshiConnector.isConnected();
+      const kalshiWsConnected = kalshiConnector.isWebSocketConnected();
 
       return `
 Connection Health:
   Polymarket REST: ${polyConnected ? '✓ Connected' : '✗ Disconnected'}
   Polymarket WebSocket: ${polyWsConnected ? '✓ Connected' : '✗ Disconnected'}
-  Kalshi REST: Not implemented yet
-  Kalshi WebSocket: Not implemented yet
+  Kalshi REST: ${kalshiConnected ? '✓ Connected' : '✗ Disconnected'}
+  Kalshi WebSocket: ${kalshiWsConnected ? '✓ Connected' : '✗ Disconnected'}
+  Bot Running: ${botRunning ? '✓ Active' : '✗ Stopped'}
       `.trim();
     }
 
@@ -80,14 +98,17 @@ Connection Health:
     }
 
     case 'balance': {
-      const balances = await polymarketConnector.getBalances();
+      const polyBalances = await polymarketConnector.getBalances();
+      const kalshiBalances = await kalshiConnector.getBalances();
       return `
 Balances:
   Polymarket:
-    Available: ${formatUsd(balances.available)} ${balances.currency}
-    Locked: ${formatUsd(balances.locked)} ${balances.currency}
-    Total: ${formatUsd(balances.total)} ${balances.currency}
-  Kalshi: Not implemented yet
+    Available: ${formatUsd(polyBalances.available)} ${polyBalances.currency}
+    Total: ${formatUsd(polyBalances.total)} ${polyBalances.currency}
+  Kalshi:
+    Available: ${formatUsd(kalshiBalances.available)} ${kalshiBalances.currency}
+    Total: ${formatUsd(kalshiBalances.total)} ${kalshiBalances.currency}
+  Combined: ${formatUsd(polyBalances.total + kalshiBalances.total)}
       `.trim();
     }
 
@@ -117,8 +138,64 @@ Balances:
       return 'Switched to LIVE mode - real trades will be executed';
     }
 
+    case 'scan': {
+      try {
+        const opportunities = await arbitrageDetector.scanForOpportunities();
+        if (opportunities.length === 0) {
+          return 'No arbitrage opportunities found.';
+        }
+
+        let output = `Found ${opportunities.length} opportunity(ies):\n`;
+        for (const opp of opportunities) {
+          output += `\n  ${opp.id.substring(0, 8)}...\n`;
+          output += `    Buy: ${opp.buyPlatform} @ ${formatUsd(opp.buyPrice)}\n`;
+          output += `    Sell: ${opp.sellPlatform} @ ${formatUsd(opp.sellPrice)}\n`;
+          output += `    Spread: ${round(opp.grossSpread * 100, 2)}%\n`;
+          output += `    Net Profit: ${formatUsd(opp.netProfit)} per contract\n`;
+          output += `    Max Qty: ${opp.maxQuantity}\n`;
+        }
+        return output.trim();
+      } catch (error) {
+        return `Scan failed: ${(error as Error).message}`;
+      }
+    }
+
+    case 'mappings': {
+      const mappings = eventMatcher.getActiveMappings();
+      if (mappings.length === 0) {
+        return 'No active event mappings. Use event matcher to build mappings.';
+      }
+
+      let output = `Active Event Mappings (${mappings.length}):\n`;
+      for (const mapping of mappings) {
+        output += `\n  ${mapping.eventDescription.substring(0, 40)}...\n`;
+        output += `    Poly: ${mapping.polymarketConditionId.substring(0, 16)}...\n`;
+        output += `    Kalshi: ${mapping.kalshiTicker}\n`;
+        output += `    Confidence: ${round(mapping.matchConfidence * 100, 1)}% (${mapping.matchMethod})\n`;
+      }
+      return output.trim();
+    }
+
     case 'opportunities': {
-      return 'Opportunity scanning not yet implemented.\nThis will show detected arbitrage opportunities.';
+      const mappings = eventMatcher.getActiveMappings();
+      let output = 'Current Opportunities by Mapping:\n';
+      let found = 0;
+
+      for (const mapping of mappings) {
+        const opp = arbitrageDetector.getLastOpportunity(mapping.id);
+        if (opp) {
+          found++;
+          output += `\n  ${mapping.eventDescription.substring(0, 30)}...\n`;
+          output += `    ${opp.buyPlatform} -> ${opp.sellPlatform}\n`;
+          output += `    Net: ${formatUsd(opp.netProfit)}/contract\n`;
+        }
+      }
+
+      if (found === 0) {
+        return 'No recent opportunities cached. Run "scan" to detect opportunities.';
+      }
+
+      return output.trim();
     }
 
     case 'config': {
@@ -229,13 +306,90 @@ async function performStartupChecks(): Promise<{ canStart: boolean; warnings: st
 }
 
 /**
+ * Stop the bot loop
+ */
+function stopBotLoop(): void {
+  if (scanInterval) {
+    clearInterval(scanInterval);
+    scanInterval = null;
+  }
+  botRunning = false;
+  logger.info('Bot loop stopped');
+}
+
+/**
+ * Start the bot loop (scans for opportunities periodically)
+ */
+function startBotLoop(): void {
+  if (botRunning) {
+    logger.warn('Bot loop already running');
+    return;
+  }
+
+  const config = getConfig();
+  botRunning = true;
+
+  logger.info('Starting bot loop...');
+
+  // Scan every 5 seconds
+  scanInterval = setInterval(async () => {
+    if (!botRunning) return;
+
+    const circuitBreaker = getCircuitBreaker();
+    if (circuitBreaker.isPaused()) {
+      return; // Don't scan if paused
+    }
+
+    try {
+      const arbitrageDetector = getArbitrageDetector();
+      const executionEngine = getExecutionEngine();
+
+      // Clean up expired opportunities
+      arbitrageDetector.clearExpired();
+
+      // Scan for new opportunities
+      const opportunities = await arbitrageDetector.scanForOpportunities();
+
+      // Execute the best opportunity if any
+      if (opportunities.length > 0) {
+        // Sort by net profit
+        opportunities.sort((a, b) => b.netProfit - a.netProfit);
+        const bestOpp = opportunities[0];
+
+        logger.info('Attempting to execute opportunity', {
+          id: bestOpp.id,
+          netProfit: bestOpp.netProfit,
+        });
+
+        const result = await executionEngine.execute(bestOpp);
+
+        if (result.success) {
+          logger.info('Execution successful', {
+            profit: result.actualProfit,
+            slippage: result.slippage,
+          });
+        } else if (result.circuitBreakerTriggered) {
+          logger.error('Circuit breaker triggered during execution');
+        }
+      }
+    } catch (error) {
+      logger.error('Error in bot loop', { error: (error as Error).message });
+    }
+  }, 5000);
+}
+
+/**
  * Graceful shutdown
  */
 async function shutdown(): Promise<void> {
   logger.info('Shutting down...');
 
+  // Stop bot loop
+  stopBotLoop();
+
   const stateManager = getStateManager();
   const polymarketConnector = getPolymarketConnector();
+  const kalshiConnector = getKalshiConnector();
   const alerter = getTelegramAlerter();
 
   // Stop auto-save
@@ -246,6 +400,7 @@ async function shutdown(): Promise<void> {
 
   // Disconnect from platforms
   await polymarketConnector.disconnect();
+  await kalshiConnector.disconnect();
 
   // Close database connection
   await closePool();
@@ -331,9 +486,40 @@ async function main(): Promise<void> {
     logger.error('Failed to connect to Polymarket');
   }
 
+  // Connect to Kalshi
+  logger.info('Connecting to Kalshi...');
+  const kalshiConnector = getKalshiConnector();
+  const kalshiConnected = await kalshiConnector.connect();
+
+  if (kalshiConnected) {
+    logger.info('Connected to Kalshi REST API');
+
+    // Connect WebSocket
+    const kalshiWsConnected = await kalshiConnector.connectWebSocket();
+    if (kalshiWsConnected) {
+      logger.info('Connected to Kalshi WebSocket');
+    } else {
+      logger.warn('Failed to connect to Kalshi WebSocket');
+    }
+  } else {
+    logger.warn('Failed to connect to Kalshi - check credentials');
+  }
+
+  // Load event mappings
+  logger.info('Loading event mappings...');
+  const eventMatcher = getEventMatcher();
+  await eventMatcher.loadMappings();
+  const mappings = eventMatcher.getActiveMappings();
+  logger.info(`Loaded ${mappings.length} event mappings`);
+
   // Send startup alert
   const alerter = getTelegramAlerter();
   await alerter.alertBotStarted(config.operatingMode.mode);
+
+  // Start bot loop if can start
+  if (canStart) {
+    startBotLoop();
+  }
 
   console.log();
   console.log('Bot initialized. Type "help" for available commands.');
