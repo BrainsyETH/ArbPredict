@@ -23,13 +23,17 @@ const CLI_COMMANDS: Record<string, string> = {
   'health': 'Check connection health to both platforms',
   'positions': 'List all open positions',
   'balance': 'Show balances on both platforms',
+  'start': 'Start the bot loop (continuous scanning)',
+  'stop': 'Stop the bot loop',
   'pause': 'Pause trading (trigger circuit breaker)',
   'resume': 'Resume trading (clear circuit breaker)',
   'dry-run': 'Switch to dry run mode',
   'live': 'Switch to live mode (requires confirmation)',
-  'scan': 'Scan for arbitrage opportunities',
+  'scan': 'Scan for arbitrage opportunities (one-time)',
   'mappings': 'Show active event mappings',
+  'add-mapping': 'Add manual mapping: add-mapping <poly-id> <kalshi-ticker>',
   'opportunities': 'Show current arbitrage opportunities',
+  'metrics': 'Show bot metrics and statistics',
   'config': 'Show current configuration',
   'help': 'Show available commands',
   'quit': 'Exit the bot',
@@ -112,9 +116,29 @@ Balances:
       `.trim();
     }
 
+    case 'start': {
+      if (botRunning) {
+        return 'Bot loop is already running';
+      }
+      if (circuitBreaker.isPaused()) {
+        return `Cannot start: circuit breaker is paused (${circuitBreaker.getPauseReason()})`;
+      }
+      startBotLoop();
+      return `Bot loop started in ${config.operatingMode.mode.toUpperCase()} mode`;
+    }
+
+    case 'stop': {
+      if (!botRunning) {
+        return 'Bot loop is not running';
+      }
+      stopBotLoop();
+      return 'Bot loop stopped';
+    }
+
     case 'pause': {
       circuitBreaker.pause('Manual pause via CLI');
-      return 'Trading paused';
+      stopBotLoop();
+      return 'Trading paused and bot loop stopped';
     }
 
     case 'resume': {
@@ -122,7 +146,7 @@ Balances:
         return 'Circuit breaker is not paused';
       }
       circuitBreaker.resume();
-      return 'Trading resumed';
+      return 'Trading resumed. Use "start" to begin scanning.';
     }
 
     case 'dry-run': {
@@ -163,7 +187,7 @@ Balances:
     case 'mappings': {
       const mappings = eventMatcher.getActiveMappings();
       if (mappings.length === 0) {
-        return 'No active event mappings. Use event matcher to build mappings.';
+        return 'No active event mappings. Use "add-mapping" to add manual mappings.';
       }
 
       let output = `Active Event Mappings (${mappings.length}):\n`;
@@ -174,6 +198,56 @@ Balances:
         output += `    Confidence: ${round(mapping.matchConfidence * 100, 1)}% (${mapping.matchMethod})\n`;
       }
       return output.trim();
+    }
+
+    case 'add-mapping': {
+      if (args.length < 2) {
+        return 'Usage: add-mapping <polymarket-condition-id> <kalshi-ticker> [description]';
+      }
+      const [polyId, kalshiTicker, ...descParts] = args;
+      const description = descParts.join(' ') || `Manual mapping: ${kalshiTicker}`;
+
+      try {
+        const mapping = await eventMatcher.addManualMapping(polyId, kalshiTicker, description);
+        return `Manual mapping added:\n  Polymarket: ${polyId}\n  Kalshi: ${kalshiTicker}\n  Confidence: 100% (manual)`;
+      } catch (error) {
+        return `Failed to add mapping: ${(error as Error).message}`;
+      }
+    }
+
+    case 'metrics': {
+      const state = stateManager.getState();
+      const totalExposure = riskManager.getTotalExposure();
+      const mappings = eventMatcher.getActiveMappings();
+      const cbStatus = circuitBreaker.getStatus();
+
+      return `
+Bot Metrics:
+  Uptime: Bot ${botRunning ? 'running' : 'stopped'}
+  Mode: ${config.operatingMode.mode.toUpperCase()}
+
+  Trading:
+    Daily Trades: ${state.dailyTradeCount}
+    Daily Volume: ${formatUsd(state.dailyVolumeUsd)}
+    Daily P&L: ${formatUsd(state.dailyPnL)}
+    Last Trade: ${state.lastSuccessfulTrade || 'None'}
+
+  Risk:
+    Total Exposure: ${formatUsd(totalExposure)} / ${formatUsd(config.risk.maxTotalExposure)}
+    Open Positions: ${state.openPositions.length}
+    Daily Loss Limit: ${formatUsd(Math.abs(state.dailyPnL))} / ${formatUsd(config.risk.dailyLossLimit)}
+
+  Circuit Breaker:
+    Status: ${cbStatus.paused ? 'PAUSED' : 'Active'}
+    Consecutive Failures: ${cbStatus.consecutiveFailures}
+    Asymmetric Executions: ${cbStatus.asymmetricExecutions}
+
+  Connections:
+    Polymarket: ${polymarketConnector.isConnected() ? '✓' : '✗'}
+    Kalshi: ${kalshiConnector.isConnected() ? '✓' : '✗'}
+
+  Mappings: ${mappings.length} active
+      `.trim();
     }
 
     case 'opportunities': {
