@@ -18,7 +18,11 @@ export function getPool(): Pool {
       password: config.database.password,
       max: 10,
       idleTimeoutMillis: 30000,
-      connectionTimeoutMillis: 2000,
+      connectionTimeoutMillis: 10000,
+      // SSL required for Supabase and other cloud providers
+      ssl: config.database.host.includes('supabase')
+        ? { rejectUnauthorized: false }
+        : undefined,
     });
 
     pool.on('error', (err) => {
