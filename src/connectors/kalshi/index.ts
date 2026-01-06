@@ -26,7 +26,7 @@ import type {
   KalshiOrderBookUpdate,
   KalshiWebSocketSubscribe,
 } from './types.js';
-import { login, getAuthHeader, isAuthenticated, clearSession } from './auth.js';
+import { validateCredentials, getAuthHeaders, isAuthenticated, clearSession } from './auth.js';
 
 const logger = createChildLogger('kalshi');
 
@@ -57,12 +57,19 @@ export class KalshiConnector implements BaseConnector {
       },
     });
 
-    // Add auth interceptor
+    // Add auth interceptor - signs each request with RSA key
     this.client.interceptors.request.use(async (reqConfig) => {
-      const authHeader = getAuthHeader();
-      if (authHeader.Authorization) {
-        reqConfig.headers.Authorization = authHeader.Authorization;
-      }
+      const method = reqConfig.method?.toUpperCase() || 'GET';
+      // Build full path including the base path
+      const basePath = '/trade-api/v2';
+      const requestPath = reqConfig.url?.startsWith('/') ? reqConfig.url : `/${reqConfig.url}`;
+      const fullPath = `${basePath}${requestPath}`;
+
+      const authHeaders = getAuthHeaders(method, fullPath);
+      Object.entries(authHeaders).forEach(([key, value]) => {
+        reqConfig.headers[key] = value;
+      });
+
       return reqConfig;
     });
 
@@ -82,18 +89,28 @@ export class KalshiConnector implements BaseConnector {
 
   async connect(): Promise<boolean> {
     try {
-      // Login to get authentication token
-      const session = await login(this.client);
-
-      if (!session) {
-        logger.error('Failed to authenticate with Kalshi');
+      // Validate API key credentials
+      if (!validateCredentials()) {
+        logger.error('Failed to validate Kalshi API credentials');
         return false;
       }
 
-      this.connected = true;
-      logger.info('Connected to Kalshi REST API');
-
-      return true;
+      // Test connection by making a simple API call
+      try {
+        await this.readRateLimiter.waitForSlot();
+        await this.client.get('/exchange/status');
+        this.connected = true;
+        logger.info('Connected to Kalshi REST API');
+        return true;
+      } catch (error) {
+        // If exchange/status fails, try another endpoint
+        logger.debug('Exchange status check failed, trying markets endpoint');
+        await this.readRateLimiter.waitForSlot();
+        await this.client.get('/markets?limit=1');
+        this.connected = true;
+        logger.info('Connected to Kalshi REST API');
+        return true;
+      }
     } catch (error) {
       logger.error('Failed to connect to Kalshi', {
         error: (error as Error).message,
@@ -164,12 +181,20 @@ export class KalshiConnector implements BaseConnector {
   private authenticateWebSocket(): void {
     if (!this.ws || !isAuthenticated()) return;
 
-    const authHeader = getAuthHeader();
+    // For API key auth, we authenticate using signed headers
+    // The WebSocket auth command expects the same signature format
+    const method = 'GET';
+    const path = '/trade-api/ws/v2';
+
+    const authHeaders = getAuthHeaders(method, path);
+
     const authMessage = {
       id: this.wsMessageId++,
       cmd: 'authenticate',
       params: {
-        token: authHeader.Authorization?.replace('Bearer ', ''),
+        api_key: authHeaders['KALSHI-ACCESS-KEY'],
+        timestamp: authHeaders['KALSHI-ACCESS-TIMESTAMP'],
+        signature: authHeaders['KALSHI-ACCESS-SIGNATURE'],
       },
     };
 
