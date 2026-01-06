@@ -14,7 +14,10 @@
     "test": "vitest",
     "test:coverage": "vitest --coverage",
     "db:migrate": "tsx src/db/migrate.ts",
-    "db:seed": "tsx src/db/seed.ts"
+    "db:seed": "tsx src/db/seed.ts",
+    "discover": "tsx src/scripts/auto-discover.ts",
+    "discover:crypto": "tsx src/scripts/auto-discover.ts crypto",
+    "discover:dry-run": "tsx src/scripts/auto-discover.ts --dry-run"
   },
   "keywords": [
     "arbitrage",
