@@ -20,14 +20,13 @@ import type {
   KalshiOrderBookResponse,
   KalshiOrderRequest,
   KalshiOrderResponse,
-  KalshiPositionResponse,
   KalshiMarketsResponse,
   KalshiPositionsResponse,
   KalshiBalanceResponse,
   KalshiOrderBookUpdate,
   KalshiWebSocketSubscribe,
 } from './types.js';
-import { login, getSession, getAuthHeader, isAuthenticated, clearSession } from './auth.js';
+import { login, getAuthHeader, isAuthenticated, clearSession } from './auth.js';
 
 const logger = createChildLogger('kalshi');
 

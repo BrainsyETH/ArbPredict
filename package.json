@@ -2,6 +2,7 @@
   "name": "polymarket-kalshi-arb-bot",
   "version": "0.1.0",
   "description": "Cross-platform arbitrage bot for Polymarket and Kalshi prediction markets",
+  "type": "module",
   "main": "dist/index.js",
   "scripts": {
     "build": "tsc",

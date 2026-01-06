@@ -11,7 +11,7 @@ import { getPolymarketConnector } from './connectors/polymarket/index.js';
 import { getKalshiConnector } from './connectors/kalshi/index.js';
 import { testConnection as testDbConnection, closePool } from './db/index.js';
 import { createChildLogger } from './utils/logger.js';
-import { formatUsd, sleep, round } from './utils/helpers.js';
+import { formatUsd, round } from './utils/helpers.js';
 
 const logger = createChildLogger('main');
 
@@ -41,7 +41,7 @@ const CLI_COMMANDS: Record<string, string> = {
 
 // Bot loop control
 let botRunning = false;
-let scanInterval: NodeJS.Timer | null = null;
+let scanInterval: ReturnType<typeof setInterval> | null = null;
 
 async function handleCommand(command: string, args: string[]): Promise<string> {
   const config = getConfig();
@@ -208,7 +208,7 @@ Balances:
       const description = descParts.join(' ') || `Manual mapping: ${kalshiTicker}`;
 
       try {
-        const mapping = await eventMatcher.addManualMapping(polyId, kalshiTicker, description);
+        await eventMatcher.addManualMapping(polyId, kalshiTicker, description);
         return `Manual mapping added:\n  Polymarket: ${polyId}\n  Kalshi: ${kalshiTicker}\n  Confidence: 100% (manual)`;
       } catch (error) {
         return `Failed to add mapping: ${(error as Error).message}`;
@@ -400,7 +400,9 @@ function startBotLoop(): void {
     return;
   }
 
-  const config = getConfig();
+  // Config available for future scan interval customization
+  const _config = getConfig();
+  void _config;
   botRunning = true;
 
   logger.info('Starting bot loop...');

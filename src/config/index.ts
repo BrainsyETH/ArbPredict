@@ -170,13 +170,15 @@ function getEnvOrDefault(key: string, defaultValue: string): string {
   return process.env[key] || defaultValue;
 }
 
-function getEnvOrThrow(key: string): string {
+// Reserved for future use when strict env validation is needed
+function _getEnvOrThrow(key: string): string {
   const value = process.env[key];
   if (!value) {
     throw new Error(`Required environment variable ${key} is not set`);
   }
   return value;
 }
+void _getEnvOrThrow;
 
 function getEnvBool(key: string, defaultValue: boolean): boolean {
   const value = process.env[key];
@@ -192,18 +194,19 @@ function getEnvNumber(key: string, defaultValue: number): number {
 }
 
 export function loadConfig(): Config {
-  // Try to load from config.yaml if it exists
-  let yamlConfig: Partial<Config> = {};
+  // Try to load from config.yaml if it exists (reserved for future deep merge)
   const configPath = './config.yaml';
+  let _yamlConfig: Partial<Config> = {};
 
   if (existsSync(configPath)) {
     try {
       const yamlContent = readFileSync(configPath, 'utf-8');
-      yamlConfig = parseYaml(yamlContent);
+      _yamlConfig = parseYaml(yamlContent);
     } catch {
       console.warn('Failed to parse config.yaml, using environment variables only');
     }
   }
+  void _yamlConfig; // Reserved for future config merging
 
   // Build config with environment variable overrides
   const config: Config = {

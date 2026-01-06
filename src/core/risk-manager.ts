@@ -309,7 +309,7 @@ export class RiskManager {
   /**
    * Get available capital on a platform
    */
-  getAvailableCapital(platform: Platform): number {
+  getAvailableCapital(_platform: Platform): number {
     const config = getConfig();
     const remainingExposure = config.risk.maxTotalExposure - this.totalExposure;
     // Split remaining exposure between platforms (simplified)

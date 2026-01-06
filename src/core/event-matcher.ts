@@ -170,7 +170,7 @@ export class EventMatcher {
     const normalizedCategory = normalize(kalshiCategory);
 
     // Find the category group for Kalshi
-    for (const [group, keywords] of Object.entries(CATEGORY_MAPPINGS)) {
+    for (const [_group, keywords] of Object.entries(CATEGORY_MAPPINGS)) {
       const kalshiInGroup = keywords.some(kw => normalizedCategory.includes(kw));
 
       if (kalshiInGroup) {

@@ -254,7 +254,7 @@ export class ArbitrageDetector {
   /**
    * Calculate execution risk based on liquidity
    */
-  private calculateExecutionRisk(quantity: number, price: number): number {
+  private calculateExecutionRisk(quantity: number, _price: number): number {
     // Lower liquidity = higher risk
     // Risk ranges from 0 (no risk) to 1 (high risk)
     const config = getConfig();

@@ -4,7 +4,6 @@ import { Wallet } from 'ethers';
 import type {
   Platform,
   OrderBook,
-  OrderBookLevel,
   OrderBookUpdate,
   LimitOrder,
   OrderResult,

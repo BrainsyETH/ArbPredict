@@ -13,7 +13,7 @@ const logger = createChildLogger('state');
  */
 export class StateManager {
   private state: PersistedState;
-  private autoSaveTimer: NodeJS.Timer | null = null;
+  private autoSaveTimer: ReturnType<typeof setInterval> | null = null;
   private readonly filePath: string;
 
   constructor() {

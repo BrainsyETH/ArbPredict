@@ -53,14 +53,14 @@ export async function deriveApiCredentials(privateKey: string): Promise<Polymark
  */
 export function generateAuthHeaders(
   credentials: PolymarketCredentials,
-  method: string,
-  path: string,
-  body?: string
+  _method: string,
+  _path: string,
+  _body?: string
 ): Record<string, string> {
   const timestamp = Math.floor(Date.now() / 1000).toString();
 
   // In production, signature would be:
-  // HMAC-SHA256(timestamp + method + path + body, apiSecret)
+  // HMAC-SHA256(timestamp + _method + _path + _body, apiSecret)
   // Base64 encoded
 
   return {

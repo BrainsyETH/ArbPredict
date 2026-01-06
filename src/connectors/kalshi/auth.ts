@@ -1,4 +1,4 @@
-import axios, { type AxiosInstance } from 'axios';
+import type { AxiosInstance } from 'axios';
 import { getConfig } from '../../config/index.js';
 import { createChildLogger } from '../../utils/logger.js';
 

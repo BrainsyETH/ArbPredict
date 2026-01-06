@@ -1,13 +1,16 @@
-import pino from 'pino';
+import pinoModule, { type Logger, pino } from 'pino';
 import { getConfig } from '../config/index.js';
 
-let loggerInstance: pino.Logger | null = null;
+// Handle both ESM and CJS pino exports
+const createPino = pino ?? pinoModule;
 
-export function getLogger(): pino.Logger {
+let loggerInstance: Logger | null = null;
+
+export function getLogger(): Logger {
   if (!loggerInstance) {
     const config = getConfig();
 
-    loggerInstance = pino({
+    loggerInstance = createPino({
       level: config.logging.level,
       transport: {
         target: 'pino-pretty',
@@ -20,10 +23,10 @@ export function getLogger(): pino.Logger {
     });
   }
 
-  return loggerInstance;
+  return loggerInstance!;
 }
 
-export function createChildLogger(context: string): pino.Logger {
+export function createChildLogger(context: string): Logger {
   return getLogger().child({ context });
 }
 

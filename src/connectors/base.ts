@@ -1,7 +1,6 @@
 import type {
   Platform,
   OrderBook,
-  OrderBookUpdate,
   LimitOrder,
   OrderResult,
   Balances,
@@ -45,7 +44,7 @@ export abstract class WebSocketManager {
   protected connected: boolean = false;
   protected reconnecting: boolean = false;
   protected lastHeartbeat: Date | null = null;
-  protected heartbeatTimer: NodeJS.Timer | null = null;
+  protected heartbeatTimer: ReturnType<typeof setInterval> | null = null;
   protected reconnectAttempts: number = 0;
   protected messageHandlers: Map<string, (data: unknown) => void> = new Map();
 
