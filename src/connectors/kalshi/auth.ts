@@ -37,9 +37,15 @@ function getPrivateKey(): crypto.KeyObject | null {
     // In .env files, \n is read as two characters (backslash + n)
     let formattedKey = privateKeyPem;
 
+    // Debug: show what we received
+    logger.debug('Raw key length: ' + privateKeyPem.length);
+    logger.debug('Key starts with: ' + privateKeyPem.substring(0, 50));
+    logger.debug('Contains backslash-n: ' + privateKeyPem.includes('\\n'));
+
     // Replace literal \n with actual newlines
     if (formattedKey.includes('\\n')) {
       formattedKey = formattedKey.replace(/\\n/g, '\n');
+      logger.debug('Replaced \\n sequences');
     }
 
     // Also handle case where it might have been double-escaped
@@ -49,6 +55,12 @@ function getPrivateKey(): crypto.KeyObject | null {
 
     // Trim any whitespace
     formattedKey = formattedKey.trim();
+
+    // Debug: show formatted result
+    const lines = formattedKey.split('\n');
+    logger.debug('Formatted key has ' + lines.length + ' lines');
+    logger.debug('First line: ' + lines[0]);
+    logger.debug('Last line: ' + lines[lines.length - 1]);
 
     // Validate it looks like a PEM key
     if (!formattedKey.includes('-----BEGIN') || !formattedKey.includes('-----END')) {
