@@ -102,14 +102,25 @@ export class KalshiConnector implements BaseConnector {
         this.connected = true;
         logger.info('Connected to Kalshi REST API');
         return true;
-      } catch (error) {
+      } catch (error: unknown) {
         // If exchange/status fails, try another endpoint
         logger.debug('Exchange status check failed, trying markets endpoint');
-        await this.readRateLimiter.waitForSlot();
-        await this.client.get('/markets?limit=1');
-        this.connected = true;
-        logger.info('Connected to Kalshi REST API');
-        return true;
+        try {
+          await this.readRateLimiter.waitForSlot();
+          await this.client.get('/markets?limit=1');
+          this.connected = true;
+          logger.info('Connected to Kalshi REST API');
+          return true;
+        } catch (innerError: unknown) {
+          // Log detailed error info
+          const axiosError = innerError as { response?: { status?: number; data?: unknown }; message?: string };
+          logger.error('Kalshi API request failed', {
+            status: axiosError.response?.status,
+            data: axiosError.response?.data,
+            message: axiosError.message,
+          });
+          throw innerError;
+        }
       }
     } catch (error) {
       logger.error('Failed to connect to Kalshi', {
