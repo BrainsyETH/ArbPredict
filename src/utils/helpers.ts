@@ -1,3 +1,4 @@
+import crypto from 'crypto';
 import type { RetryPolicy } from '../types/index.js';
 import { logger } from './logger.js';
 
@@ -9,10 +10,10 @@ export function sleep(ms: number): Promise<void> {
 }
 
 /**
- * Generate a unique ID
+ * Generate a unique ID (UUID v4 format for database compatibility)
  */
 export function generateId(): string {
-  return `${Date.now()}-${Math.random().toString(36).substring(2, 15)}`;
+  return crypto.randomUUID();
 }
 
 /**
