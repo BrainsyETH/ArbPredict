@@ -85,7 +85,8 @@ async function seedDatabase(): Promise<void> {
     logger.info('Database seeded successfully');
     logger.info(`Inserted ${SAMPLE_MAPPINGS.length} sample event mappings`);
   } catch (error) {
-    logger.error('Seed failed', { error: (error as Error).message });
+    logger.error(`Seed failed: ${(error as Error).message}`);
+    console.error('Full error:', error);
     process.exit(1);
   } finally {
     await closePool();
