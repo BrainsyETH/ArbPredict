@@ -89,8 +89,8 @@ export interface Config {
     wsUrl: string;
   };
   kalshi: {
-    email: string;
-    password: string;
+    apiKeyId: string;
+    privateKey: string;
     apiBase: string;
     wsUrl: string;
   };
@@ -219,8 +219,8 @@ export function loadConfig(): Config {
     },
 
     kalshi: {
-      email: getEnvOrDefault('KALSHI_EMAIL', ''),
-      password: getEnvOrDefault('KALSHI_PASSWORD', ''),
+      apiKeyId: getEnvOrDefault('KALSHI_API_KEY_ID', ''),
+      privateKey: getEnvOrDefault('KALSHI_PRIVATE_KEY', ''),
       apiBase: 'https://trading-api.kalshi.com/trade-api/v2',
       wsUrl: 'wss://trading-api.kalshi.com/trade-api/ws/v2',
     },
