@@ -81,23 +81,25 @@ export async function transaction<T>(
 export async function testConnection(): Promise<boolean> {
   try {
     const config = getConfig();
-    logger.info('Attempting database connection', {
-      host: config.database.host,
-      port: config.database.port,
-      database: config.database.name,
-      user: config.database.user,
-      ssl: config.database.host.includes('supabase') ? 'enabled' : 'disabled',
-    });
+    const ssl = config.database.host.includes('supabase') ? 'enabled' : 'disabled';
+    // Use console.log for visibility since pino-pretty may truncate details
+    console.log(`\n📊 Database connection details:`);
+    console.log(`   Host: ${config.database.host}`);
+    console.log(`   Port: ${config.database.port}`);
+    console.log(`   Database: ${config.database.name}`);
+    console.log(`   User: ${config.database.user}`);
+    console.log(`   SSL: ${ssl}`);
+    console.log(`   Password: ${config.database.password ? '***set***' : '(empty)'}\n`);
+
     const result = await query('SELECT NOW() as now');
     logger.info('Database connection successful', { serverTime: result.rows[0] });
     return true;
   } catch (error) {
     const err = error as Error & { code?: string };
-    logger.error('Database connection failed', {
-      error: err.message,
-      code: err.code,
-      stack: err.stack?.split('\n')[0],
-    });
+    console.log(`\n❌ Connection error:`);
+    console.log(`   Message: ${err.message}`);
+    console.log(`   Code: ${err.code || 'none'}\n`);
+    logger.error('Database connection failed');
     return false;
   }
 }
