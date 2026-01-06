@@ -221,8 +221,8 @@ export function loadConfig(): Config {
     kalshi: {
       apiKeyId: getEnvOrDefault('KALSHI_API_KEY_ID', ''),
       privateKey: getEnvOrDefault('KALSHI_PRIVATE_KEY', ''),
-      apiBase: 'https://trading-api.kalshi.com/trade-api/v2',
-      wsUrl: 'wss://trading-api.kalshi.com/trade-api/ws/v2',
+      apiBase: 'https://api.elections.kalshi.com/trade-api/v2',
+      wsUrl: 'wss://api.elections.kalshi.com/trade-api/ws/v2',
     },
 
     trading: {
