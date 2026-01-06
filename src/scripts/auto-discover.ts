@@ -10,61 +10,123 @@ const logger = createChildLogger('auto-discover');
 interface PolymarketApiMarket {
   condition_id: string;
   question: string;
-  description: string;
-  end_date_iso: string;
+  question_id?: string;
+  description?: string;
+  end_date_iso?: string;
+  game_start_time?: string;
   active: boolean;
   closed: boolean;
-  tokens: Array<{
+  tokens?: Array<{
     token_id: string;
     outcome: string;
-    price: number;
+    price?: number;
   }>;
+  outcomes?: string;
+  outcomePrices?: string;
+  clobTokenIds?: string[];
+}
+
+interface PolymarketApiResponse {
+  // CLOB API returns array directly or with next_cursor
+  data?: PolymarketApiMarket[];
+  markets?: PolymarketApiMarket[];
+  next_cursor?: string;
 }
 
 /**
  * Fetch markets from Polymarket API
+ * Tries both CLOB and Gamma APIs
  */
 async function fetchPolymarketMarkets(category?: string): Promise<PolymarketMarket[]> {
   try {
-    const response = await axios.get<PolymarketApiMarket[]>(
-      'https://clob.polymarket.com/markets',
+    // Try the Gamma Markets API first (more data)
+    let response = await axios.get<PolymarketApiResponse | PolymarketApiMarket[]>(
+      'https://gamma-api.polymarket.com/markets',
       {
         params: {
           limit: 100,
           active: true,
+          closed: false,
         },
         timeout: 30000,
       }
     );
 
-    const markets: PolymarketMarket[] = response.data
+    // Handle different response structures
+    let rawMarkets: PolymarketApiMarket[];
+
+    if (Array.isArray(response.data)) {
+      rawMarkets = response.data;
+    } else if (response.data.data) {
+      rawMarkets = response.data.data;
+    } else if (response.data.markets) {
+      rawMarkets = response.data.markets;
+    } else {
+      // Fallback to CLOB API
+      logger.debug('Gamma API response unexpected, trying CLOB API');
+      const clobResponse = await axios.get<PolymarketApiMarket[]>(
+        'https://clob.polymarket.com/markets',
+        {
+          params: { limit: 100 },
+          timeout: 30000,
+        }
+      );
+      rawMarkets = Array.isArray(clobResponse.data) ? clobResponse.data : [];
+    }
+
+    const markets: PolymarketMarket[] = rawMarkets
       .filter(m => m.active && !m.closed)
       .filter(m => {
         if (!category) return true;
-        const text = `${m.question} ${m.description}`.toLowerCase();
+        const text = `${m.question || ''} ${m.description || ''}`.toLowerCase();
         return text.includes(category.toLowerCase());
       })
       .map(m => {
-        const yesToken = m.tokens?.find(t => t.outcome === 'Yes');
-        const noToken = m.tokens?.find(t => t.outcome === 'No');
+        // Handle different token formats
+        let yesPrice = 0;
+        let noPrice = 0;
+        let yesTokenId = '';
+        let noTokenId = '';
+
+        if (m.tokens && m.tokens.length > 0) {
+          const yesToken = m.tokens.find(t => t.outcome === 'Yes');
+          const noToken = m.tokens.find(t => t.outcome === 'No');
+          yesPrice = yesToken?.price || 0;
+          noPrice = noToken?.price || 0;
+          yesTokenId = yesToken?.token_id || '';
+          noTokenId = noToken?.token_id || '';
+        } else if (m.outcomePrices) {
+          try {
+            const prices = JSON.parse(m.outcomePrices);
+            yesPrice = parseFloat(prices[0]) || 0;
+            noPrice = parseFloat(prices[1]) || 0;
+          } catch { /* ignore parse errors */ }
+        }
+
+        if (m.clobTokenIds && m.clobTokenIds.length >= 2) {
+          yesTokenId = m.clobTokenIds[0];
+          noTokenId = m.clobTokenIds[1];
+        }
+
+        const endDate = m.end_date_iso || m.game_start_time;
 
         return {
           id: m.condition_id,
           conditionId: m.condition_id,
-          questionId: m.condition_id,
+          questionId: m.question_id || m.condition_id,
           title: m.question,
           description: m.description || '',
           outcomes: ['Yes', 'No'],
-          outcomePrices: [yesToken?.price || 0, noToken?.price || 0],
+          outcomePrices: [yesPrice, noPrice],
           tokens: {
-            yes: yesToken?.token_id || '',
-            no: noToken?.token_id || '',
+            yes: yesTokenId,
+            no: noTokenId,
           },
-          yesPrice: yesToken?.price || 0,
-          noPrice: noToken?.price || 0,
+          yesPrice,
+          noPrice,
           volume: 0,
           liquidity: 0,
-          endDate: new Date(m.end_date_iso),
+          endDate: endDate ? new Date(endDate) : new Date(),
           category: category || 'unknown',
         };
       });
