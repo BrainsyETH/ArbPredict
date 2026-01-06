@@ -33,21 +33,52 @@ function getPrivateKey(): crypto.KeyObject | null {
   }
 
   try {
-    // Handle key that might be passed as single line with \n literals
-    const formattedKey = privateKeyPem.includes('\\n')
-      ? privateKeyPem.replace(/\\n/g, '\n')
-      : privateKeyPem;
+    // Handle key that might be passed as single line with literal \n
+    // In .env files, \n is read as two characters (backslash + n)
+    let formattedKey = privateKeyPem;
+
+    // Debug: show what we received
+    logger.debug('Raw key length: ' + privateKeyPem.length);
+    logger.debug('Key starts with: ' + privateKeyPem.substring(0, 50));
+    logger.debug('Contains backslash-n: ' + privateKeyPem.includes('\\n'));
+
+    // Replace literal \n with actual newlines
+    if (formattedKey.includes('\\n')) {
+      formattedKey = formattedKey.replace(/\\n/g, '\n');
+      logger.debug('Replaced \\n sequences');
+    }
+
+    // Also handle case where it might have been double-escaped
+    if (formattedKey.includes('\\\\n')) {
+      formattedKey = formattedKey.replace(/\\\\n/g, '\n');
+    }
+
+    // Trim any whitespace
+    formattedKey = formattedKey.trim();
+
+    // Debug: show formatted result
+    const lines = formattedKey.split('\n');
+    logger.debug('Formatted key has ' + lines.length + ' lines');
+    logger.debug('First line: ' + lines[0]);
+    logger.debug('Last line: ' + lines[lines.length - 1]);
+
+    // Validate it looks like a PEM key
+    if (!formattedKey.includes('-----BEGIN') || !formattedKey.includes('-----END')) {
+      logger.error('Private key does not appear to be in PEM format. Expected -----BEGIN PRIVATE KEY----- or -----BEGIN RSA PRIVATE KEY-----');
+      return null;
+    }
 
     cachedPrivateKey = crypto.createPrivateKey({
       key: formattedKey,
       format: 'pem',
     });
 
-    logger.debug('Private key loaded successfully');
+    logger.info('Private key loaded successfully');
     return cachedPrivateKey;
   } catch (error) {
     logger.error('Failed to parse Kalshi private key', {
       error: (error as Error).message,
+      hint: 'Ensure key is in PEM format with proper newlines. Use \\n for line breaks in .env file.',
     });
     return null;
   }
