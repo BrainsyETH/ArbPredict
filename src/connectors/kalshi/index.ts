@@ -408,8 +408,8 @@ export class KalshiConnector implements BaseConnector {
         // Debug: Log raw API response structure on first page
         if (pageCount === 0 && response.data.markets.length > 0) {
           const sample = response.data.markets[0];
-          logger.debug(`Raw Kalshi market keys: ${Object.keys(sample).join(', ')}`);
-          logger.debug(`Raw sample: ticker=${sample.ticker}, event_ticker=${sample.event_ticker}, category=${sample.category}`);
+          logger.info(`Raw Kalshi API keys: ${Object.keys(sample).join(', ')}`);
+          logger.info(`Raw sample: ticker=${sample.ticker}, event_ticker=${sample.event_ticker || '(empty)'}, category=${sample.category || '(empty)'}`);
         }
 
         const markets = response.data.markets.map(this.transformMarket);
@@ -509,18 +509,18 @@ export class KalshiConnector implements BaseConnector {
 
       // Debug: Show sample event tickers we're looking for
       const sampleEventTickers = Array.from(matchingEventTickers).slice(0, 5);
-      logger.debug(`Sample event tickers to match: ${sampleEventTickers.join(', ')}`);
+      logger.info(`Sample event tickers to match: ${sampleEventTickers.join(', ')}`);
 
       // Step 2: Get all markets (paginated but efficient)
       const allMarkets = await this.getMarkets('open', maxMarkets);
 
       // Debug: Show sample market eventTickers
-      const sampleMarketEventTickers = [...new Set(allMarkets.slice(0, 20).map(m => m.eventTicker))];
-      logger.debug(`Sample market eventTickers: ${sampleMarketEventTickers.join(', ')}`);
+      const sampleMarketEventTickers = [...new Set(allMarkets.slice(0, 20).map(m => m.eventTicker).filter(Boolean))];
+      logger.info(`Sample market eventTickers: ${sampleMarketEventTickers.length > 0 ? sampleMarketEventTickers.join(', ') : '(all empty)'}`);
 
       // Check how many markets have eventTicker set
       const marketsWithEventTicker = allMarkets.filter(m => m.eventTicker && m.eventTicker.length > 0);
-      logger.debug(`Markets with eventTicker set: ${marketsWithEventTicker.length}/${allMarkets.length}`);
+      logger.info(`Markets with eventTicker set: ${marketsWithEventTicker.length}/${allMarkets.length}`);
 
       // Step 3: Filter markets by event_ticker and attach category (in memory, no API calls)
       const filteredMarkets = allMarkets
