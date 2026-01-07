@@ -216,8 +216,11 @@ function findMatchDryRun(
   return null;
 }
 
+// Kalshi categories that likely overlap with Polymarket
+const KALSHI_POLITICAL_CATEGORIES = ['Politics', 'Elections', 'Economics', 'Climate and Weather', 'Health', 'World'];
+
 /**
- * Fetch markets from Kalshi API
+ * Fetch markets from Kalshi API, focusing on political/news categories
  */
 async function fetchKalshiMarkets(category?: string): Promise<KalshiMarket[]> {
   try {
@@ -232,19 +235,49 @@ async function fetchKalshiMarkets(category?: string): Promise<KalshiMarket[]> {
       }
     }
 
-    logger.info('Fetching Kalshi markets (limiting to 500 for speed)...');
-    const markets = await connector.getMarkets('open', 500);  // Limit to 500 markets for faster discovery
-    logger.info(`Kalshi returned ${markets.length} total markets`);
+    // Get events first to find relevant event tickers
+    logger.info('Fetching Kalshi events to find political markets...');
+    const events = await connector.getEvents();
 
-    // Filter by category if specified
-    const filtered = category
-      ? markets.filter(m => {
-          const text = `${m.title} ${m.category}`.toLowerCase();
-          return text.includes(category.toLowerCase());
-        })
-      : markets;
+    // Filter events by political categories
+    const relevantEvents = events.filter(e =>
+      KALSHI_POLITICAL_CATEGORIES.includes(e.category)
+    );
+    logger.info(`Found ${relevantEvents.length} events in political categories`);
 
-    logger.info(`Fetched ${filtered.length} Kalshi markets${category ? ` matching "${category}"` : ''}`);
+    // Get markets - fetch more since we're filtering
+    logger.info('Fetching Kalshi markets...');
+    const allMarkets = await connector.getMarkets('open', 1000);
+    logger.info(`Kalshi returned ${allMarkets.length} total markets`);
+
+    // Filter markets to only those from political events
+    const relevantEventTickers = new Set(relevantEvents.map(e => e.event_ticker));
+    let filtered = allMarkets.filter(m => {
+      // Check if market's event_ticker is in our relevant list
+      // Markets have ticker format like "KXPRESPERSON-28-DJT" where "KXPRESPERSON-28" is the event
+      const eventTicker = m.ticker.split('-').slice(0, -1).join('-');
+      return relevantEventTickers.has(eventTicker) || relevantEventTickers.has(m.ticker);
+    });
+
+    // If no matches by event ticker, try category-based filtering
+    if (filtered.length === 0) {
+      logger.info('No event ticker matches, trying category-based filtering...');
+      filtered = allMarkets.filter(m =>
+        KALSHI_POLITICAL_CATEGORIES.some(cat =>
+          m.category?.toLowerCase().includes(cat.toLowerCase())
+        )
+      );
+    }
+
+    // Additional category filter if specified
+    if (category) {
+      filtered = filtered.filter(m => {
+        const text = `${m.title} ${m.category}`.toLowerCase();
+        return text.includes(category.toLowerCase());
+      });
+    }
+
+    logger.info(`Fetched ${filtered.length} Kalshi political markets${category ? ` matching "${category}"` : ''}`);
     return filtered;
   } catch (error) {
     logger.error(`Failed to fetch Kalshi markets: ${(error as Error).message}`);
