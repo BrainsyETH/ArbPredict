@@ -478,46 +478,67 @@ export class KalshiConnector implements BaseConnector {
   }
 
   /**
+   * Get all markets with categories attached via memory-join with events
+   * OPTIMIZED: Only 2-6 API calls total (1 for events + 1-5 for paginated markets)
+   *
+   * @param categoryFilter - Optional array of categories to filter (if empty, returns all)
+   * @param maxMarkets - Maximum markets to fetch (default: 1000)
+   */
+  async getAllMarketsWithCategories(categoryFilter?: string[], maxMarkets: number = 1000): Promise<KalshiMarket[]> {
+    try {
+      // Step 1: Fetch all events to build category lookup (1 API call)
+      logger.info('Fetching Kalshi events for category lookup...');
+      const events = await this.getEvents();
+
+      // Build eventTicker -> category map
+      const eventCategoryMap = new Map<string, string>();
+      for (const event of events) {
+        eventCategoryMap.set(event.event_ticker, event.category || '');
+      }
+      logger.info(`Built category map from ${events.length} events`);
+
+      // Step 2: Fetch ALL markets with pagination (1-5 API calls depending on total)
+      logger.info('Fetching all Kalshi markets...');
+      const allMarkets = await this.getMarkets('open', maxMarkets);
+      logger.info(`Fetched ${allMarkets.length} total markets`);
+
+      // Step 3: Attach categories via memory join
+      let marketsWithCategory = 0;
+      for (const market of allMarkets) {
+        if (market.eventTicker && eventCategoryMap.has(market.eventTicker)) {
+          market.category = eventCategoryMap.get(market.eventTicker)!;
+          marketsWithCategory++;
+        }
+      }
+      logger.info(`Attached categories to ${marketsWithCategory}/${allMarkets.length} markets`);
+
+      // Step 4: Filter by category if specified
+      if (categoryFilter && categoryFilter.length > 0) {
+        const filtered = allMarkets.filter(m =>
+          categoryFilter.some(cat =>
+            m.category?.toLowerCase().includes(cat.toLowerCase())
+          )
+        );
+        logger.info(`Filtered to ${filtered.length} markets matching categories: ${categoryFilter.slice(0, 3).join(', ')}...`);
+        return filtered;
+      }
+
+      return allMarkets;
+    } catch (error) {
+      logger.error('Failed to get markets with categories', { error: (error as Error).message });
+      return [];
+    }
+  }
+
+  /**
+   * @deprecated Use getAllMarketsWithCategories instead (fewer API calls)
    * Get all markets from events matching specific categories
    * Uses event_ticker filter to get only political markets (avoids sports flood)
    * Makes N API calls where N = number of matching events (capped at maxEvents)
    */
   async getMarketsByCategories(categories: string[], maxEvents: number = 50): Promise<KalshiMarket[]> {
-    try {
-      // Step 1: Get all events (single API call)
-      const events = await this.getEvents();
-
-      // Filter to matching categories
-      const matchingEvents = events.filter(e =>
-        categories.some(cat =>
-          e.category?.toLowerCase().includes(cat.toLowerCase())
-        )
-      );
-
-      logger.info(`Found ${matchingEvents.length} events matching categories: ${categories.slice(0, 5).join(', ')}...`);
-
-      if (matchingEvents.length === 0) {
-        return [];
-      }
-
-      // Cap the number of events to limit API calls
-      const eventsToFetch = matchingEvents.slice(0, maxEvents);
-      logger.info(`Fetching markets for ${eventsToFetch.length} political events (${eventsToFetch.length} API calls)...`);
-
-      // Step 2: Fetch markets for each political event
-      const allMarkets: KalshiMarket[] = [];
-
-      for (const event of eventsToFetch) {
-        const markets = await this.getMarketsByEvent(event.event_ticker, event.category);
-        allMarkets.push(...markets);
-      }
-
-      logger.info(`Fetched ${allMarkets.length} political markets from ${eventsToFetch.length} events`);
-      return allMarkets;
-    } catch (error) {
-      logger.error('Failed to get markets by categories', { error: (error as Error).message });
-      return [];
-    }
+    // Redirect to optimized method
+    return this.getAllMarketsWithCategories(categories);
   }
 
   async getMarket(ticker: string): Promise<KalshiMarket | null> {

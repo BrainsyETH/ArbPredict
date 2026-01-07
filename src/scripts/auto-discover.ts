@@ -256,10 +256,10 @@ async function fetchKalshiMarkets(category?: string, skipFiltering: boolean = fa
       return allMarkets;
     }
 
-    // Use the new category-based fetching approach
-    // This fetches events first (which have categories), then gets markets for each event
-    logger.info('Fetching Kalshi political markets via events...');
-    const markets = await connector.getMarketsByCategories(KALSHI_POLITICAL_CATEGORIES);
+    // Use optimized batch fetching approach
+    // This fetches ALL markets + events in ~2-6 API calls, then filters in memory
+    logger.info('Fetching Kalshi markets via optimized batch method...');
+    const markets = await connector.getAllMarketsWithCategories(KALSHI_POLITICAL_CATEGORIES);
 
     // Additional category filter if specified
     let filtered = markets;
