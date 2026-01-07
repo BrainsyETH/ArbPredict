@@ -231,8 +231,11 @@ const KALSHI_POLITICAL_CATEGORIES = [
 
 /**
  * Fetch markets from Kalshi API
- * Fetches ALL markets with categories attached (no category filtering by default)
- * @param category - Optional category filter (applied in memory after fetch)
+ *
+ * Note: Kalshi's /markets endpoint returns sports betting markets by default.
+ * To get political/news markets, we must fetch via event_ticker filter.
+ *
+ * @param category - Optional additional category filter
  */
 async function fetchKalshiMarkets(category?: string): Promise<KalshiMarket[]> {
   try {
@@ -247,12 +250,13 @@ async function fetchKalshiMarkets(category?: string): Promise<KalshiMarket[]> {
       }
     }
 
-    // Fetch ALL markets with categories (no filtering = maximum coverage)
-    // Uses optimized batch fetch: ~2-6 API calls total
-    logger.info('Fetching all Kalshi markets via optimized batch method...');
-    const markets = await connector.getAllMarketsWithCategories(); // No category filter
+    // Fetch political/news markets via event-based approach
+    // This avoids the sports betting flood from the default /markets endpoint
+    // API calls: 1 (cached events) + N (per matching event, capped at 100)
+    logger.info('Fetching Kalshi political/news markets via events...');
+    const markets = await connector.getMarketsByCategories(KALSHI_POLITICAL_CATEGORIES, 100);
 
-    // Optional category filter if specified by user
+    // Additional category filter if specified by user
     let filtered = markets;
     if (category) {
       filtered = markets.filter(m => {
@@ -262,7 +266,7 @@ async function fetchKalshiMarkets(category?: string): Promise<KalshiMarket[]> {
       logger.info(`Filtered to ${filtered.length} markets matching "${category}"`);
     }
 
-    logger.info(`Fetched ${filtered.length} Kalshi markets total`);
+    logger.info(`Fetched ${filtered.length} Kalshi political markets`);
     return filtered;
   } catch (error) {
     logger.error(`Failed to fetch Kalshi markets: ${(error as Error).message}`);
