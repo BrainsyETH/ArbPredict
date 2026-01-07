@@ -250,14 +250,31 @@ async function fetchKalshiMarkets(category?: string): Promise<KalshiMarket[]> {
     const allMarkets = await connector.getMarkets('open', 1000);
     logger.info(`Kalshi returned ${allMarkets.length} total markets`);
 
+    // Debug: Log sample market and event structure
+    if (allMarkets.length > 0) {
+      const sample = allMarkets[0];
+      logger.debug(`Sample market keys: ${Object.keys(sample).join(', ')}`);
+      logger.debug(`Sample market: ticker=${sample.ticker}, category=${sample.category}, title=${sample.title?.substring(0, 50)}`);
+    }
+    if (relevantEvents.length > 0) {
+      logger.debug(`Sample event ticker: ${relevantEvents[0].event_ticker}`);
+    }
+
     // Filter markets to only those from political events
     const relevantEventTickers = new Set(relevantEvents.map(e => e.event_ticker));
+    logger.debug(`Looking for event tickers like: ${Array.from(relevantEventTickers).slice(0, 5).join(', ')}`);
+
+    // Log sample market's eventTicker for debugging
+    if (allMarkets.length > 0) {
+      logger.debug(`Sample market eventTicker: "${allMarkets[0].eventTicker}", ticker: "${allMarkets[0].ticker}"`);
+    }
+
     let filtered = allMarkets.filter(m => {
-      // Check if market's event_ticker is in our relevant list
-      // Markets have ticker format like "KXPRESPERSON-28-DJT" where "KXPRESPERSON-28" is the event
-      const eventTicker = m.ticker.split('-').slice(0, -1).join('-');
-      return relevantEventTickers.has(eventTicker) || relevantEventTickers.has(m.ticker);
+      // Check if market's eventTicker matches one of the political events
+      return relevantEventTickers.has(m.eventTicker);
     });
+
+    logger.debug(`Filtered to ${filtered.length} markets by eventTicker`);
 
     // If no matches by event ticker, try category-based filtering
     if (filtered.length === 0) {

@@ -55,6 +55,7 @@ export interface PolymarketMarket extends BaseMarket {
 
 export interface KalshiMarket extends BaseMarket {
   ticker: string;
+  eventTicker: string;
   category: string;
   yesPrice: number;
   noPrice: number;

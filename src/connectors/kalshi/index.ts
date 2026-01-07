@@ -458,6 +458,7 @@ export class KalshiConnector implements BaseConnector {
     return {
       id: apiMarket.ticker,
       ticker: apiMarket.ticker,
+      eventTicker: apiMarket.event_ticker,
       title: apiMarket.title,
       category: apiMarket.category,
       yesPrice: apiMarket.yes_ask / 100, // Convert cents to dollars
