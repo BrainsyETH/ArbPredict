@@ -352,7 +352,33 @@ export class KalshiConnector implements BaseConnector {
     return this.lastHeartbeat;
   }
 
-  async getMarkets(status: 'open' | 'closed' | 'settled' = 'open', maxResults?: number): Promise<KalshiMarket[]> {
+  async getSeries(): Promise<Array<{ ticker: string; title: string; category: string }>> {
+    try {
+      await this.readRateLimiter.waitForSlot();
+      const response = await this.client.get<{ series: Array<{ ticker: string; title: string; category: string }> }>('/series');
+      return response.data.series || [];
+    } catch (error) {
+      logger.error('Failed to get series', { error: (error as Error).message });
+      return [];
+    }
+  }
+
+  async getEvents(seriesTicker?: string): Promise<Array<{ event_ticker: string; title: string; category: string; series_ticker: string }>> {
+    try {
+      await this.readRateLimiter.waitForSlot();
+      const params: Record<string, unknown> = { status: 'open' };
+      if (seriesTicker) {
+        params.series_ticker = seriesTicker;
+      }
+      const response = await this.client.get<{ events: Array<{ event_ticker: string; title: string; category: string; series_ticker: string }> }>('/events', { params });
+      return response.data.events || [];
+    } catch (error) {
+      logger.error('Failed to get events', { error: (error as Error).message });
+      return [];
+    }
+  }
+
+  async getMarkets(status: 'open' | 'closed' | 'settled' = 'open', maxResults?: number, seriesTicker?: string): Promise<KalshiMarket[]> {
     const config = getConfig();
     const allMarkets: KalshiMarket[] = [];
     let cursor: string | undefined;
@@ -362,14 +388,19 @@ export class KalshiConnector implements BaseConnector {
       do {
         await this.readRateLimiter.waitForSlot();
 
+        const params: Record<string, unknown> = {
+          status,
+          limit: 100,
+          cursor,
+        };
+
+        // Add series filter if provided
+        if (seriesTicker) {
+          params.series_ticker = seriesTicker;
+        }
+
         const response = await withRetry(
-          () => this.client.get<KalshiMarketsResponse>('/markets', {
-            params: {
-              status,
-              limit: 100,
-              cursor,
-            },
-          }),
+          () => this.client.get<KalshiMarketsResponse>('/markets', { params }),
           config.retry.api,
           'Kalshi getMarkets'
         );

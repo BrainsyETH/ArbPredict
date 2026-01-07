@@ -384,13 +384,41 @@ if (process.argv[1]?.includes('auto-discover')) {
   const dryRun = args.includes('--dry-run');
   const verbose = args.includes('--verbose') || args.includes('-v');
   const preview = args.includes('--preview');
+  const listSeries = args.includes('--list-series');
   const category = args.filter(a => !a.startsWith('--') && a !== '-v')[0] || undefined;
 
   if (verbose) {
     process.env.LOG_LEVEL = 'debug';
   }
 
-  if (preview) {
+  if (listSeries) {
+    // List available Kalshi series/categories
+    console.log('Fetching Kalshi series and events...\n');
+    const connector = getKalshiConnector();
+    connector.connect().then(async () => {
+      const events = await connector.getEvents();
+
+      // Group by category
+      const byCategory: Record<string, Array<{ ticker: string; title: string }>> = {};
+      for (const event of events) {
+        const cat = event.category || 'Unknown';
+        if (!byCategory[cat]) byCategory[cat] = [];
+        byCategory[cat].push({ ticker: event.event_ticker, title: event.title });
+      }
+
+      console.log('=== KALSHI EVENTS BY CATEGORY ===\n');
+      for (const [cat, evts] of Object.entries(byCategory).sort()) {
+        console.log(`📁 ${cat} (${evts.length} events)`);
+        evts.slice(0, 5).forEach(e => {
+          console.log(`   - ${e.ticker}: ${e.title.substring(0, 50)}...`);
+        });
+        if (evts.length > 5) {
+          console.log(`   ... and ${evts.length - 5} more`);
+        }
+        console.log('');
+      }
+    }).catch(console.error);
+  } else if (preview) {
     // Just show sample markets without matching
     console.log('Fetching markets for preview...\n');
     Promise.all([
