@@ -3,7 +3,7 @@ import { getKalshiConnector } from '../connectors/kalshi/index.js';
 import { getEventMatcher } from '../core/event-matcher.js';
 import { testConnection, closePool } from '../db/index.js';
 import { createChildLogger } from '../utils/logger.js';
-import { normalize, levenshteinSimilarity } from '../utils/helpers.js';
+import { normalize, levenshteinSimilarity, combinedSimilarity, tokenSimilarity } from '../utils/helpers.js';
 import type { PolymarketMarket, KalshiMarket } from '../types/index.js';
 
 const logger = createChildLogger('auto-discover');
@@ -180,16 +180,16 @@ async function fetchPolymarketMarkets(category?: string): Promise<PolymarketMark
 
 /**
  * Simple matching function for dry-run mode (no database required)
- * Uses a lower threshold than production to find potential matches
+ * Uses combined similarity (Levenshtein + token-based with synonyms)
  */
 function findMatchDryRun(
   polymarket: PolymarketMarket,
   kalshiMarkets: KalshiMarket[],
   minSimilarity: number = 0.5  // Lower threshold for discovery
-): { kalshiTicker: string; confidence: number; kalshiTitle: string } | null {
+): { kalshiTicker: string; confidence: number; kalshiTitle: string; matchType: string } | null {
   const normalizedPolyTitle = normalize(polymarket.title);
 
-  let bestMatch: { kalshiTicker: string; confidence: number; kalshiTitle: string } | null = null;
+  let bestMatch: { kalshiTicker: string; confidence: number; kalshiTitle: string; matchType: string } | null = null;
   let bestSimilarity = 0;
 
   for (const kalshi of kalshiMarkets) {
@@ -197,14 +197,18 @@ function findMatchDryRun(
 
     // Exact match
     if (normalizedPolyTitle === normalizedKalshiTitle) {
-      return { kalshiTicker: kalshi.ticker, confidence: 1.0, kalshiTitle: kalshi.title };
+      return { kalshiTicker: kalshi.ticker, confidence: 1.0, kalshiTitle: kalshi.title, matchType: 'exact' };
     }
 
-    // Fuzzy match - track best match
-    const similarity = levenshteinSimilarity(normalizedPolyTitle, normalizedKalshiTitle);
+    // Combined similarity (uses both Levenshtein and token-based with synonyms)
+    const similarity = combinedSimilarity(polymarket.title, kalshi.title);
     if (similarity > bestSimilarity) {
       bestSimilarity = similarity;
-      bestMatch = { kalshiTicker: kalshi.ticker, confidence: similarity, kalshiTitle: kalshi.title };
+      // Determine which method gave the higher score
+      const levenshtein = levenshteinSimilarity(normalizedPolyTitle, normalizedKalshiTitle);
+      const token = tokenSimilarity(polymarket.title, kalshi.title);
+      const matchType = token > levenshtein ? 'token' : 'levenshtein';
+      bestMatch = { kalshiTicker: kalshi.ticker, confidence: similarity, kalshiTitle: kalshi.title, matchType };
     }
   }
 
@@ -227,7 +231,8 @@ const KALSHI_POLITICAL_CATEGORIES = [
 
 /**
  * Fetch markets from Kalshi API, focusing on political/news categories
- * @param category - Optional category filter
+ * Uses event-based fetching since categories are only available on events, not markets
+ * @param category - Optional additional category filter
  * @param skipFiltering - If true, return all markets without category filtering (useful for debugging)
  */
 async function fetchKalshiMarkets(category?: string, skipFiltering: boolean = false): Promise<KalshiMarket[]> {
@@ -243,84 +248,30 @@ async function fetchKalshiMarkets(category?: string, skipFiltering: boolean = fa
       }
     }
 
-    // Get events first to find relevant event tickers
-    logger.info('Fetching Kalshi events to find political markets...');
-    const events = await connector.getEvents();
-
-    // Filter events by political categories
-    const relevantEvents = events.filter(e =>
-      KALSHI_POLITICAL_CATEGORIES.includes(e.category)
-    );
-    logger.info(`Found ${relevantEvents.length} events in political categories`);
-
-    // Get markets - fetch more since we're filtering
-    logger.info('Fetching Kalshi markets...');
-    const allMarkets = await connector.getMarkets('open', 1000);
-    logger.info(`Kalshi returned ${allMarkets.length} total markets`);
-
-    // Debug: Log sample market and event structure
-    if (allMarkets.length > 0) {
-      const sample = allMarkets[0];
-      logger.debug(`Sample market keys: ${Object.keys(sample).join(', ')}`);
-      logger.debug(`Sample market: ticker=${sample.ticker}, eventTicker=${sample.eventTicker}, category=${sample.category}`);
-
-      // Show unique categories in fetched markets
-      const categories = new Set(allMarkets.map(m => m.category).filter(Boolean));
-      logger.info(`Kalshi market categories found: ${Array.from(categories).join(', ')}`);
-
-      // Show unique eventTickers in fetched markets (first 10)
-      const marketEventTickers = new Set(allMarkets.map(m => m.eventTicker).filter(Boolean));
-      logger.debug(`Sample market eventTickers: ${Array.from(marketEventTickers).slice(0, 10).join(', ')}`);
-    }
-
-    // Skip filtering if requested (for debugging)
+    // Skip filtering - fetch raw markets (useful for debugging)
     if (skipFiltering) {
-      logger.info(`Skipping category filtering, returning all ${allMarkets.length} markets`);
+      logger.info('Fetching all Kalshi markets (no category filter)...');
+      const allMarkets = await connector.getMarkets('open', 200);
+      logger.info(`Kalshi returned ${allMarkets.length} total markets`);
       return allMarkets;
     }
 
-    if (relevantEvents.length > 0) {
-      logger.debug(`Sample political event tickers: ${relevantEvents.slice(0, 5).map(e => e.event_ticker).join(', ')}`);
-    }
-
-    // Filter markets to only those from political events
-    const relevantEventTickers = new Set(relevantEvents.map(e => e.event_ticker));
-
-    // Log sample market's eventTicker for debugging
-    if (allMarkets.length > 0) {
-      // Check how many markets have eventTicker set
-      const marketsWithEventTicker = allMarkets.filter(m => m.eventTicker);
-      logger.debug(`Markets with eventTicker set: ${marketsWithEventTicker.length}/${allMarkets.length}`);
-    }
-
-    let filtered = allMarkets.filter(m => {
-      // Check if market's eventTicker matches one of the political events
-      return relevantEventTickers.has(m.eventTicker);
-    });
-
-    logger.debug(`Filtered to ${filtered.length} markets by eventTicker`);
-
-    // If no matches by event ticker, try category-based filtering
-    if (filtered.length === 0) {
-      logger.info('No event ticker matches, trying category-based filtering...');
-      logger.info(`Looking for categories containing: ${KALSHI_POLITICAL_CATEGORIES.join(', ')}`);
-      filtered = allMarkets.filter(m =>
-        KALSHI_POLITICAL_CATEGORIES.some(cat =>
-          m.category?.toLowerCase().includes(cat.toLowerCase())
-        )
-      );
-      logger.debug(`Category-based filtering found ${filtered.length} markets`);
-    }
+    // Use the new category-based fetching approach
+    // This fetches events first (which have categories), then gets markets for each event
+    logger.info('Fetching Kalshi political markets via events...');
+    const markets = await connector.getMarketsByCategories(KALSHI_POLITICAL_CATEGORIES);
 
     // Additional category filter if specified
+    let filtered = markets;
     if (category) {
-      filtered = filtered.filter(m => {
+      filtered = markets.filter(m => {
         const text = `${m.title} ${m.category}`.toLowerCase();
         return text.includes(category.toLowerCase());
       });
+      logger.info(`Filtered to ${filtered.length} markets matching "${category}"`);
     }
 
-    logger.info(`Fetched ${filtered.length} Kalshi political markets${category ? ` matching "${category}"` : ''}`);
+    logger.info(`Fetched ${filtered.length} Kalshi political markets`);
     return filtered;
   } catch (error) {
     logger.error(`Failed to fetch Kalshi markets: ${(error as Error).message}`);
@@ -495,12 +446,11 @@ if (process.argv[1]?.includes('auto-discover')) {
       }
     }).catch(console.error);
   } else if (preview) {
-    // Just show sample markets without matching
-    // Skip filtering to show all available markets for debugging
-    console.log('Fetching markets for preview (no category filter)...\n');
+    // Show political markets from both platforms with matching
+    console.log('Fetching political markets for preview...\n');
     Promise.all([
       fetchPolymarketMarkets(category),
-      fetchKalshiMarkets(category, true), // skipFiltering=true
+      fetchKalshiMarkets(category, false), // Use category-based filtering
     ]).then(([polymarkets, kalshiMarkets]) => {
       console.log('=== POLYMARKET MARKETS ===');
       polymarkets.slice(0, 10).forEach((m, i) => {
@@ -508,30 +458,47 @@ if (process.argv[1]?.includes('auto-discover')) {
       });
       console.log(`\n... and ${Math.max(0, polymarkets.length - 10)} more\n`);
 
-      console.log('=== KALSHI MARKETS ===');
+      console.log('=== KALSHI POLITICAL MARKETS ===');
       kalshiMarkets.slice(0, 10).forEach((m, i) => {
-        console.log(`${i + 1}. [${m.category}] ${m.title}`);
+        console.log(`${i + 1}. [${m.category || 'N/A'}] ${m.title}`);
       });
       console.log(`\n... and ${Math.max(0, kalshiMarkets.length - 10)} more\n`);
 
       // Show unique categories found
       const categories = new Set(kalshiMarkets.map(m => m.category).filter(Boolean));
-      console.log('=== KALSHI CATEGORIES FOUND ===');
-      Array.from(categories).sort().forEach(cat => {
-        const count = kalshiMarkets.filter(m => m.category === cat).length;
-        console.log(`  - ${cat}: ${count} markets`);
-      });
-      console.log('');
+      if (categories.size > 0) {
+        console.log('=== KALSHI CATEGORIES FOUND ===');
+        Array.from(categories).sort().forEach(cat => {
+          const count = kalshiMarkets.filter(m => m.category === cat).length;
+          console.log(`  - ${cat}: ${count} markets`);
+        });
+        console.log('');
+      }
 
-      // Show best matches for first 5 Polymarket markets
+      // Show best matches for first 15 Polymarket markets
       console.log('=== BEST POTENTIAL MATCHES ===');
-      polymarkets.slice(0, 5).forEach((pm, i) => {
-        const bestMatch = findMatchDryRun(pm, kalshiMarkets, 0.0);
+      console.log('(Using combined Levenshtein + token-based matching with synonym expansion)\n');
+      let matchCount = 0;
+      polymarkets.slice(0, 15).forEach((pm, i) => {
+        const bestMatch = findMatchDryRun(pm, kalshiMarkets, 0.3); // 30% threshold for preview
         if (bestMatch) {
-          console.log(`\n${i + 1}. Polymarket: "${pm.title.substring(0, 60)}..."`);
-          console.log(`   Best Kalshi (${(bestMatch.confidence * 100).toFixed(0)}%): "${bestMatch.kalshiTitle.substring(0, 60)}..."`);
+          matchCount++;
+          const confStr = `${(bestMatch.confidence * 100).toFixed(0)}%`;
+          const typeStr = bestMatch.matchType === 'token' ? '🔤' : '📝';
+          console.log(`${i + 1}. [${confStr}] ${typeStr} Poly: "${pm.title.substring(0, 50)}..."`);
+          console.log(`           Kalshi: "${bestMatch.kalshiTitle.substring(0, 50)}..."`);
         }
       });
+
+      if (matchCount === 0) {
+        console.log('\nNo matches found above 30% similarity.');
+        console.log('This could indicate:');
+        console.log('  - Different market coverage between platforms');
+        console.log('  - Different phrasing of similar markets');
+        console.log('  - Need to adjust matching algorithm');
+      }
+
+      console.log(`\n\nSummary: ${polymarkets.length} Polymarket markets, ${kalshiMarkets.length} Kalshi political markets`);
     }).catch(console.error);
   } else {
     autoDiscoverMappings({ category, dryRun })

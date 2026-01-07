@@ -3,6 +3,10 @@ import {
   normalize,
   levenshteinDistance,
   levenshteinSimilarity,
+  tokenize,
+  jaccardSimilarity,
+  tokenSimilarity,
+  combinedSimilarity,
   datesMatch,
   round,
   formatUsd,
@@ -197,5 +201,87 @@ describe('generateId', () => {
   it('should generate non-empty strings', () => {
     const id = generateId();
     expect(id.length).toBeGreaterThan(0);
+  });
+});
+
+describe('tokenize', () => {
+  it('should split text into word tokens', () => {
+    const tokens = tokenize('Hello World');
+    expect(tokens.has('hello')).toBe(true);
+    expect(tokens.has('world')).toBe(true);
+  });
+
+  it('should expand synonyms', () => {
+    // BTC should be expanded to bitcoin
+    const tokens = tokenize('Will BTC reach $100k?');
+    expect(tokens.has('bitcoin')).toBe(true);
+    expect(tokens.has('100000')).toBe(true);
+  });
+
+  it('should filter short tokens', () => {
+    const tokens = tokenize('A is B');
+    expect(tokens.has('a')).toBe(false);
+    expect(tokens.has('is')).toBe(true);
+  });
+});
+
+describe('jaccardSimilarity', () => {
+  it('should return 1 for identical sets', () => {
+    const a = new Set(['hello', 'world']);
+    const b = new Set(['hello', 'world']);
+    expect(jaccardSimilarity(a, b)).toBe(1);
+  });
+
+  it('should return 0 for disjoint sets', () => {
+    const a = new Set(['hello']);
+    const b = new Set(['world']);
+    expect(jaccardSimilarity(a, b)).toBe(0);
+  });
+
+  it('should return 0.5 for half overlap', () => {
+    const a = new Set(['hello', 'world']);
+    const b = new Set(['hello', 'earth']);
+    // intersection = {hello}, union = {hello, world, earth}
+    // 1/3 = 0.333...
+    expect(jaccardSimilarity(a, b)).toBeCloseTo(0.333, 2);
+  });
+});
+
+describe('tokenSimilarity', () => {
+  it('should match texts with synonyms', () => {
+    const sim = tokenSimilarity('Will BTC reach $100k?', 'Will Bitcoin reach 100000?');
+    // After synonym expansion, these should be very similar
+    expect(sim).toBeGreaterThan(0.7);
+  });
+
+  it('should match texts with different word order', () => {
+    const sim = tokenSimilarity('Trump wins election', 'Election wins Trump');
+    // Same words, different order - Jaccard doesn't care about order
+    expect(sim).toBe(1);
+  });
+
+  it('should handle completely different texts', () => {
+    const sim = tokenSimilarity('Apple pie recipe', 'Bitcoin price prediction');
+    expect(sim).toBeLessThan(0.2);
+  });
+});
+
+describe('combinedSimilarity', () => {
+  it('should use Levenshtein for character-similar strings', () => {
+    // Very similar strings character-wise
+    const sim = combinedSimilarity('Bitcoin reaches 100k', 'Bitcoins reaches 100k');
+    expect(sim).toBeGreaterThan(0.9);
+  });
+
+  it('should use token-based for synonym matches', () => {
+    // BTC = Bitcoin, should match well with token-based
+    const sim = combinedSimilarity('BTC reaches 100k', 'Bitcoin reaches 100000');
+    expect(sim).toBeGreaterThan(0.6);
+  });
+
+  it('should return higher of two methods', () => {
+    // This test ensures we get the best match
+    const sim = combinedSimilarity('Trump 2025', 'Donald Trump 2025');
+    expect(sim).toBeGreaterThan(0.5);
   });
 });

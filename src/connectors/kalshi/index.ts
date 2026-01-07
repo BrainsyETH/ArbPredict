@@ -429,6 +429,100 @@ export class KalshiConnector implements BaseConnector {
     }
   }
 
+  /**
+   * Get markets for a specific event ticker
+   * This is the preferred way to get political/news markets since the category comes from the event
+   */
+  async getMarketsByEvent(eventTicker: string, category?: string): Promise<KalshiMarket[]> {
+    const config = getConfig();
+
+    try {
+      await this.readRateLimiter.waitForSlot();
+
+      const params: Record<string, unknown> = {
+        event_ticker: eventTicker,
+        status: 'open',
+      };
+
+      const response = await withRetry(
+        () => this.client.get<KalshiMarketsResponse>('/markets', { params }),
+        config.retry.api,
+        'Kalshi getMarketsByEvent'
+      );
+
+      // Transform and attach category from the event
+      const markets = response.data.markets.map(m => {
+        const market = this.transformMarket(m);
+        // Override category with the one from the event (since market category is often empty)
+        if (category) {
+          market.category = category;
+        }
+        return market;
+      });
+
+      return markets;
+    } catch (error) {
+      logger.error('Failed to get markets by event', {
+        eventTicker,
+        error: (error as Error).message,
+      });
+      return [];
+    }
+  }
+
+  /**
+   * Get all markets from events matching specific categories
+   * Uses efficient approach: fetch events once, fetch markets once, join in memory
+   * Only 2 API calls regardless of how many events/markets
+   */
+  async getMarketsByCategories(categories: string[], maxMarkets: number = 500): Promise<KalshiMarket[]> {
+    try {
+      // Step 1: Get all events (single API call)
+      const events = await this.getEvents();
+
+      // Build a map of event_ticker -> category for matching events
+      const eventCategoryMap = new Map<string, string>();
+      const matchingEventTickers = new Set<string>();
+
+      for (const event of events) {
+        const matches = categories.some(cat =>
+          event.category?.toLowerCase().includes(cat.toLowerCase())
+        );
+        if (matches) {
+          eventCategoryMap.set(event.event_ticker, event.category);
+          matchingEventTickers.add(event.event_ticker);
+        }
+      }
+
+      logger.info(`Found ${matchingEventTickers.size} events matching categories: ${categories.slice(0, 5).join(', ')}...`);
+
+      if (matchingEventTickers.size === 0) {
+        return [];
+      }
+
+      // Step 2: Get all markets (paginated but efficient)
+      const allMarkets = await this.getMarkets('open', maxMarkets);
+
+      // Step 3: Filter markets by event_ticker and attach category (in memory, no API calls)
+      const filteredMarkets = allMarkets
+        .filter(m => matchingEventTickers.has(m.eventTicker))
+        .map(m => {
+          // Attach category from the event
+          const category = eventCategoryMap.get(m.eventTicker);
+          if (category) {
+            m.category = category;
+          }
+          return m;
+        });
+
+      logger.info(`Filtered to ${filteredMarkets.length} political markets from ${allMarkets.length} total (2 API calls)`);
+      return filteredMarkets;
+    } catch (error) {
+      logger.error('Failed to get markets by categories', { error: (error as Error).message });
+      return [];
+    }
+  }
+
   async getMarket(ticker: string): Promise<KalshiMarket | null> {
     const config = getConfig();
 

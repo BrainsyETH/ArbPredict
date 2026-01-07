@@ -69,6 +69,106 @@ export function levenshteinSimilarity(a: string, b: string): number {
   return 1 - distance / maxLength;
 }
 
+// Common synonyms and abbreviations for prediction markets
+const SYNONYMS: Record<string, string[]> = {
+  'bitcoin': ['btc', 'bitcoin'],
+  'ethereum': ['eth', 'ethereum'],
+  'trump': ['trump', 'donald trump', 'donald j trump'],
+  'biden': ['biden', 'joe biden', 'joseph biden'],
+  'president': ['president', 'potus', 'presidential'],
+  'federal reserve': ['fed', 'federal reserve', 'fomc'],
+  'united states': ['us', 'usa', 'united states', 'america'],
+  '100000': ['100k', '100000', '100,000'],
+  '50000': ['50k', '50000', '50,000'],
+  'january': ['jan', 'january'],
+  'february': ['feb', 'february'],
+  'march': ['mar', 'march'],
+  'april': ['apr', 'april'],
+  'june': ['jun', 'june'],
+  'july': ['jul', 'july'],
+  'august': ['aug', 'august'],
+  'september': ['sep', 'sept', 'september'],
+  'october': ['oct', 'october'],
+  'november': ['nov', 'november'],
+  'december': ['dec', 'december'],
+  '2025': ['2025', "'25"],
+  '2026': ['2026', "'26"],
+};
+
+/**
+ * Expand synonyms in text to canonical form
+ */
+function expandSynonyms(text: string): string {
+  let expanded = text.toLowerCase();
+  for (const [canonical, synonyms] of Object.entries(SYNONYMS)) {
+    for (const syn of synonyms) {
+      if (syn !== canonical) {
+        // Replace synonym with canonical form (word boundary aware)
+        const regex = new RegExp(`\\b${syn}\\b`, 'gi');
+        expanded = expanded.replace(regex, canonical);
+      }
+    }
+  }
+  return expanded;
+}
+
+/**
+ * Tokenize text into words, expanding synonyms
+ */
+export function tokenize(text: string): Set<string> {
+  const expanded = expandSynonyms(text);
+  const normalized = expanded
+    .toLowerCase()
+    .replace(/[^\w\s]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+
+  const tokens = normalized.split(' ').filter(t => t.length > 1);
+  return new Set(tokens);
+}
+
+/**
+ * Calculate Jaccard similarity between two sets of tokens (0-1)
+ * Good for matching texts with different word order or synonyms
+ */
+export function jaccardSimilarity(a: Set<string>, b: Set<string>): number {
+  if (a.size === 0 && b.size === 0) return 1;
+  if (a.size === 0 || b.size === 0) return 0;
+
+  const intersection = new Set([...a].filter(x => b.has(x)));
+  const union = new Set([...a, ...b]);
+
+  return intersection.size / union.size;
+}
+
+/**
+ * Calculate token-based similarity between two strings (0-1)
+ * Expands synonyms and uses Jaccard similarity on tokens
+ */
+export function tokenSimilarity(a: string, b: string): number {
+  const tokensA = tokenize(a);
+  const tokensB = tokenize(b);
+  return jaccardSimilarity(tokensA, tokensB);
+}
+
+/**
+ * Calculate combined similarity score using both Levenshtein and token-based matching
+ * Returns the higher of the two scores for best match detection
+ */
+export function combinedSimilarity(a: string, b: string): number {
+  const normalizedA = normalize(a);
+  const normalizedB = normalize(b);
+
+  // Levenshtein for character-level similarity
+  const levenshtein = levenshteinSimilarity(normalizedA, normalizedB);
+
+  // Token-based for word-level similarity (handles word order, synonyms)
+  const token = tokenSimilarity(a, b);
+
+  // Return the higher score - if either method finds a good match, use it
+  return Math.max(levenshtein, token);
+}
+
 /**
  * Check if two dates match within a tolerance
  */
