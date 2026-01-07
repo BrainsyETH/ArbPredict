@@ -47,7 +47,7 @@ async function fetchPolymarketMarkets(category?: string): Promise<PolymarketMark
       'https://gamma-api.polymarket.com/markets',
       {
         params: {
-          limit: 100,
+          limit: 500,
           active: true,
           closed: false,
         },
@@ -222,11 +222,17 @@ function findMatchDryRun(
 
 // Kalshi categories that likely overlap with Polymarket
 // Note: These must match Kalshi's actual category names (case-insensitive)
-const KALSHI_POLITICAL_CATEGORIES = [
+const KALSHI_CATEGORIES = [
+  // Political/News
   'Politics', 'Elections', 'Economics', 'Climate and Weather', 'Health', 'World',
-  // Additional variations that Kalshi might use
-  'Financial', 'Financials', 'Weather', 'Climate', 'Government', 'Policy',
-  'Congress', 'President', 'Presidential', 'Senate', 'House',
+  'Government', 'Policy', 'Congress', 'President', 'Presidential', 'Senate', 'House',
+  // Financial/Crypto - high overlap potential with Polymarket
+  'Financial', 'Financials', 'Crypto', 'Cryptocurrency', 'Bitcoin', 'Ethereum',
+  'Markets', 'Stocks', 'Fed', 'Interest Rates', 'Inflation', 'GDP',
+  // Tech
+  'Tech', 'Technology', 'AI', 'Artificial Intelligence',
+  // Entertainment/Culture (some Polymarket overlap)
+  'Entertainment', 'Culture', 'Awards', 'Oscars', 'Emmys',
 ];
 
 /**
@@ -250,11 +256,11 @@ async function fetchKalshiMarkets(category?: string): Promise<KalshiMarket[]> {
       }
     }
 
-    // Fetch political/news markets via event-based approach
+    // Fetch markets via event-based approach (political, financial, crypto, etc.)
     // This avoids the sports betting flood from the default /markets endpoint
-    // API calls: 1 (cached events) + N (per matching event, capped at 100)
-    logger.info('Fetching Kalshi political/news markets via events...');
-    const markets = await connector.getMarketsByCategories(KALSHI_POLITICAL_CATEGORIES, 100);
+    // API calls: 1 (cached events) + N (per matching event, capped at 150)
+    logger.info('Fetching Kalshi markets via events (political, financial, crypto)...');
+    const markets = await connector.getMarketsByCategories(KALSHI_CATEGORIES, 150);
 
     // Additional category filter if specified by user
     let filtered = markets;
