@@ -235,6 +235,29 @@ const KALSHI_CATEGORIES = [
   'Entertainment', 'Culture', 'Awards', 'Oscars', 'Emmys',
 ];
 
+// Crypto-focused categories for Kalshi
+const KALSHI_CRYPTO_CATEGORIES = [
+  'Crypto', 'Cryptocurrency', 'Bitcoin', 'Ethereum', 'Financial', 'Financials',
+  'Markets', 'Economics',
+];
+
+// Crypto keywords to filter Polymarket markets
+const CRYPTO_KEYWORDS = [
+  'bitcoin', 'btc', 'ethereum', 'eth', 'crypto', 'cryptocurrency',
+  'solana', 'sol', 'xrp', 'ripple', 'dogecoin', 'doge',
+  'defi', 'nft', 'blockchain', 'token', 'coin',
+];
+
+/**
+ * Filter markets to crypto-related only
+ */
+function filterCryptoMarkets<T extends { title: string }>(markets: T[]): T[] {
+  return markets.filter(m => {
+    const text = m.title.toLowerCase();
+    return CRYPTO_KEYWORDS.some(keyword => text.includes(keyword));
+  });
+}
+
 /**
  * Fetch markets from Kalshi API
  *
@@ -242,8 +265,9 @@ const KALSHI_CATEGORIES = [
  * To get political/news markets, we must fetch via event_ticker filter.
  *
  * @param category - Optional additional category filter
+ * @param cryptoOnly - If true, only fetch crypto/financial categories
  */
-async function fetchKalshiMarkets(category?: string): Promise<KalshiMarket[]> {
+async function fetchKalshiMarkets(category?: string, cryptoOnly: boolean = false): Promise<KalshiMarket[]> {
   try {
     const connector = getKalshiConnector();
 
@@ -256,23 +280,32 @@ async function fetchKalshiMarkets(category?: string): Promise<KalshiMarket[]> {
       }
     }
 
-    // Fetch markets via event-based approach (political, financial, crypto, etc.)
-    // This avoids the sports betting flood from the default /markets endpoint
+    // Choose categories based on mode
+    const categories = cryptoOnly ? KALSHI_CRYPTO_CATEGORIES : KALSHI_CATEGORIES;
+    const modeLabel = cryptoOnly ? 'crypto/financial' : 'political, financial, crypto';
+
+    // Fetch markets via event-based approach
     // API calls: 1 (cached events) + N (per matching event, capped at 150)
-    logger.info('Fetching Kalshi markets via events (political, financial, crypto)...');
-    const markets = await connector.getMarketsByCategories(KALSHI_CATEGORIES, 150);
+    logger.info(`Fetching Kalshi ${modeLabel} markets via events...`);
+    const markets = await connector.getMarketsByCategories(categories, 150);
+
+    // For crypto mode, also filter by crypto keywords in title
+    let filtered = markets;
+    if (cryptoOnly) {
+      filtered = filterCryptoMarkets(markets);
+      logger.info(`Filtered to ${filtered.length} crypto-related markets`);
+    }
 
     // Additional category filter if specified by user
-    let filtered = markets;
     if (category) {
-      filtered = markets.filter(m => {
+      filtered = filtered.filter(m => {
         const text = `${m.title} ${m.category || ''}`.toLowerCase();
         return text.includes(category.toLowerCase());
       });
       logger.info(`Filtered to ${filtered.length} markets matching "${category}"`);
     }
 
-    logger.info(`Fetched ${filtered.length} Kalshi political markets`);
+    logger.info(`Fetched ${filtered.length} Kalshi markets`);
     return filtered;
   } catch (error) {
     logger.error(`Failed to fetch Kalshi markets: ${(error as Error).message}`);
@@ -413,6 +446,7 @@ if (process.argv[1]?.includes('auto-discover')) {
   const verbose = args.includes('--verbose') || args.includes('-v');
   const preview = args.includes('--preview');
   const listSeries = args.includes('--list-series');
+  const cryptoOnly = args.includes('--crypto');
   const category = args.filter(a => !a.startsWith('--') && a !== '-v')[0] || undefined;
 
   if (verbose) {
@@ -447,12 +481,17 @@ if (process.argv[1]?.includes('auto-discover')) {
       }
     }).catch(console.error);
   } else if (preview) {
-    // Show political markets from both platforms with matching
-    console.log('Fetching political markets for preview...\n');
+    // Show markets from both platforms with matching
+    const modeLabel = cryptoOnly ? 'CRYPTO (BTC/ETH)' : 'political/financial';
+    console.log(`Fetching ${modeLabel} markets for preview...\n`);
+
+    // Fetch markets
     Promise.all([
       fetchPolymarketMarkets(category),
-      fetchKalshiMarkets(category, false), // Use category-based filtering
-    ]).then(([polymarkets, kalshiMarkets]) => {
+      fetchKalshiMarkets(category, cryptoOnly),
+    ]).then(([rawPolymarkets, kalshiMarkets]) => {
+      // Filter Polymarket to crypto if in crypto mode
+      const polymarkets = cryptoOnly ? filterCryptoMarkets(rawPolymarkets) : rawPolymarkets;
       console.log('=== POLYMARKET MARKETS ===');
       polymarkets.slice(0, 10).forEach((m, i) => {
         console.log(`${i + 1}. ${m.title}`);
