@@ -180,27 +180,37 @@ async function fetchPolymarketMarkets(category?: string): Promise<PolymarketMark
 
 /**
  * Simple matching function for dry-run mode (no database required)
+ * Uses a lower threshold than production to find potential matches
  */
 function findMatchDryRun(
   polymarket: PolymarketMarket,
   kalshiMarkets: KalshiMarket[],
-  minSimilarity: number = 0.7
-): { kalshiTicker: string; confidence: number } | null {
+  minSimilarity: number = 0.5  // Lower threshold for discovery
+): { kalshiTicker: string; confidence: number; kalshiTitle: string } | null {
   const normalizedPolyTitle = normalize(polymarket.title);
+
+  let bestMatch: { kalshiTicker: string; confidence: number; kalshiTitle: string } | null = null;
+  let bestSimilarity = 0;
 
   for (const kalshi of kalshiMarkets) {
     const normalizedKalshiTitle = normalize(kalshi.title);
 
     // Exact match
     if (normalizedPolyTitle === normalizedKalshiTitle) {
-      return { kalshiTicker: kalshi.ticker, confidence: 1.0 };
+      return { kalshiTicker: kalshi.ticker, confidence: 1.0, kalshiTitle: kalshi.title };
     }
 
-    // Fuzzy match
+    // Fuzzy match - track best match
     const similarity = levenshteinSimilarity(normalizedPolyTitle, normalizedKalshiTitle);
-    if (similarity >= minSimilarity) {
-      return { kalshiTicker: kalshi.ticker, confidence: similarity };
+    if (similarity > bestSimilarity) {
+      bestSimilarity = similarity;
+      bestMatch = { kalshiTicker: kalshi.ticker, confidence: similarity, kalshiTitle: kalshi.title };
     }
+  }
+
+  // Return best match if above threshold
+  if (bestMatch && bestSimilarity >= minSimilarity) {
+    return bestMatch;
   }
 
   return null;
@@ -286,13 +296,39 @@ export async function autoDiscoverMappings(options: {
   let found = 0;
   let added = 0;
 
+  // Show sample markets for debugging
+  if (polymarketMarkets.length > 0) {
+    logger.info('Sample Polymarket markets:');
+    polymarketMarkets.slice(0, 3).forEach((m, i) => {
+      logger.info(`  ${i + 1}. "${m.title.substring(0, 60)}..."`);
+    });
+  }
+  if (kalshiMarkets.length > 0) {
+    logger.info('Sample Kalshi markets:');
+    kalshiMarkets.slice(0, 3).forEach((m, i) => {
+      logger.info(`  ${i + 1}. "${m.title.substring(0, 60)}..."`);
+    });
+  }
+
+  let noMatchCount = 0;
+  const showNoMatchSamples = 5; // Show first N markets with their best non-match
+
   for (const polymarket of polymarketMarkets) {
     if (dryRun) {
       // Dry-run mode: use simple matching without database
       const match = findMatchDryRun(polymarket, kalshiMarkets);
       if (match) {
         found++;
-        logger.info(`[DRY RUN] Would match: "${polymarket.title.substring(0, 40)}..." → ${match.kalshiTicker} (${(match.confidence * 100).toFixed(1)}% confidence)`);
+        logger.info(`[DRY RUN] Match (${(match.confidence * 100).toFixed(0)}%): "${polymarket.title.substring(0, 50)}" → "${match.kalshiTitle.substring(0, 50)}"`);
+      } else {
+        // Show best match even if below threshold (for debugging)
+        noMatchCount++;
+        if (noMatchCount <= showNoMatchSamples) {
+          const bestMatch = findMatchDryRun(polymarket, kalshiMarkets, 0.0); // No threshold
+          if (bestMatch) {
+            logger.debug(`[NO MATCH] Best (${(bestMatch.confidence * 100).toFixed(0)}%): "${polymarket.title.substring(0, 40)}" ≈ "${bestMatch.kalshiTitle.substring(0, 40)}"`);
+          }
+        }
       }
     } else {
       // Normal mode: use event matcher with database
@@ -346,9 +382,45 @@ export async function listCategories(): Promise<void> {
 if (process.argv[1]?.includes('auto-discover')) {
   const args = process.argv.slice(2);
   const dryRun = args.includes('--dry-run');
-  const category = args.filter(a => !a.startsWith('--'))[0] || undefined;
+  const verbose = args.includes('--verbose') || args.includes('-v');
+  const preview = args.includes('--preview');
+  const category = args.filter(a => !a.startsWith('--') && a !== '-v')[0] || undefined;
 
-  autoDiscoverMappings({ category, dryRun })
+  if (verbose) {
+    process.env.LOG_LEVEL = 'debug';
+  }
+
+  if (preview) {
+    // Just show sample markets without matching
+    console.log('Fetching markets for preview...\n');
+    Promise.all([
+      fetchPolymarketMarkets(category),
+      fetchKalshiMarkets(category),
+    ]).then(([polymarkets, kalshiMarkets]) => {
+      console.log('=== POLYMARKET MARKETS ===');
+      polymarkets.slice(0, 10).forEach((m, i) => {
+        console.log(`${i + 1}. ${m.title}`);
+      });
+      console.log(`\n... and ${Math.max(0, polymarkets.length - 10)} more\n`);
+
+      console.log('=== KALSHI MARKETS ===');
+      kalshiMarkets.slice(0, 10).forEach((m, i) => {
+        console.log(`${i + 1}. ${m.title}`);
+      });
+      console.log(`\n... and ${Math.max(0, kalshiMarkets.length - 10)} more\n`);
+
+      // Show best matches for first 5 Polymarket markets
+      console.log('=== BEST POTENTIAL MATCHES ===');
+      polymarkets.slice(0, 5).forEach((pm, i) => {
+        const bestMatch = findMatchDryRun(pm, kalshiMarkets, 0.0);
+        if (bestMatch) {
+          console.log(`\n${i + 1}. Polymarket: "${pm.title.substring(0, 60)}..."`);
+          console.log(`   Best Kalshi (${(bestMatch.confidence * 100).toFixed(0)}%): "${bestMatch.kalshiTitle.substring(0, 60)}..."`);
+        }
+      });
+    }).catch(console.error);
+  } else {
+    autoDiscoverMappings({ category, dryRun })
     .then(async result => {
       console.log(`\nResults: ${result.found} found, ${result.added} added`);
       if (!dryRun) {
@@ -359,4 +431,5 @@ if (process.argv[1]?.includes('auto-discover')) {
       console.error('Auto-discovery failed:', error);
       process.exit(1);
     });
+  }
 }
