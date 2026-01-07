@@ -46,6 +46,11 @@ export class KalshiConnector implements BaseConnector {
   private wsMessageId: number = 1;
   private orderBooks: Map<string, OrderBook> = new Map();
 
+  // Caching for events (reduces API calls on repeated runs)
+  private eventsCache: Array<{ event_ticker: string; title: string; category: string; series_ticker: string }> | null = null;
+  private eventsCacheTime: Date | null = null;
+  private readonly eventsCacheTTLMs: number = 5 * 60 * 1000; // 5 minutes
+
   constructor() {
     const config = getConfig();
 
@@ -363,7 +368,16 @@ export class KalshiConnector implements BaseConnector {
     }
   }
 
-  async getEvents(seriesTicker?: string): Promise<Array<{ event_ticker: string; title: string; category: string; series_ticker: string }>> {
+  async getEvents(seriesTicker?: string, useCache: boolean = true): Promise<Array<{ event_ticker: string; title: string; category: string; series_ticker: string }>> {
+    // Check cache first (only for unfiltered requests)
+    if (useCache && !seriesTicker && this.eventsCache && this.eventsCacheTime) {
+      const cacheAge = Date.now() - this.eventsCacheTime.getTime();
+      if (cacheAge < this.eventsCacheTTLMs) {
+        logger.debug(`Using cached events (${this.eventsCache.length} events, ${Math.round(cacheAge / 1000)}s old)`);
+        return this.eventsCache;
+      }
+    }
+
     try {
       await this.readRateLimiter.waitForSlot();
       const params: Record<string, unknown> = { status: 'open' };
@@ -371,11 +385,29 @@ export class KalshiConnector implements BaseConnector {
         params.series_ticker = seriesTicker;
       }
       const response = await this.client.get<{ events: Array<{ event_ticker: string; title: string; category: string; series_ticker: string }> }>('/events', { params });
-      return response.data.events || [];
+      const events = response.data.events || [];
+
+      // Cache unfiltered results
+      if (!seriesTicker) {
+        this.eventsCache = events;
+        this.eventsCacheTime = new Date();
+        logger.debug(`Cached ${events.length} events`);
+      }
+
+      return events;
     } catch (error) {
       logger.error('Failed to get events', { error: (error as Error).message });
       return [];
     }
+  }
+
+  /**
+   * Clear the events cache (useful for forcing a refresh)
+   */
+  clearEventsCache(): void {
+    this.eventsCache = null;
+    this.eventsCacheTime = null;
+    logger.debug('Events cache cleared');
   }
 
   async getMarkets(status: 'open' | 'closed' | 'settled' = 'open', maxResults?: number, seriesTicker?: string): Promise<KalshiMarket[]> {
@@ -478,68 +510,67 @@ export class KalshiConnector implements BaseConnector {
   }
 
   /**
-   * Get all markets from events matching specific categories
-   * Uses efficient approach: fetch events once, fetch markets once, join in memory
-   * Only 2 API calls regardless of how many events/markets
+   * Get all markets with categories attached via memory-join with events
+   * OPTIMIZED: Only 2-6 API calls total (1 for events + 1-5 for paginated markets)
+   *
+   * @param categoryFilter - Optional array of categories to filter (if empty, returns all)
+   * @param maxMarkets - Maximum markets to fetch (default: 1000)
    */
-  async getMarketsByCategories(categories: string[], maxMarkets: number = 500): Promise<KalshiMarket[]> {
+  async getAllMarketsWithCategories(categoryFilter?: string[], maxMarkets: number = 1000): Promise<KalshiMarket[]> {
     try {
-      // Step 1: Get all events (single API call)
+      // Step 1: Fetch all events to build category lookup (1 API call)
+      logger.info('Fetching Kalshi events for category lookup...');
       const events = await this.getEvents();
 
-      // Build a map of event_ticker -> category for matching events
+      // Build eventTicker -> category map
       const eventCategoryMap = new Map<string, string>();
-      const matchingEventTickers = new Set<string>();
-
       for (const event of events) {
-        const matches = categories.some(cat =>
-          event.category?.toLowerCase().includes(cat.toLowerCase())
-        );
-        if (matches) {
-          eventCategoryMap.set(event.event_ticker, event.category);
-          matchingEventTickers.add(event.event_ticker);
+        eventCategoryMap.set(event.event_ticker, event.category || '');
+      }
+      logger.info(`Built category map from ${events.length} events`);
+
+      // Step 2: Fetch ALL markets with pagination (1-5 API calls depending on total)
+      logger.info('Fetching all Kalshi markets...');
+      const allMarkets = await this.getMarkets('open', maxMarkets);
+      logger.info(`Fetched ${allMarkets.length} total markets`);
+
+      // Step 3: Attach categories via memory join
+      let marketsWithCategory = 0;
+      for (const market of allMarkets) {
+        if (market.eventTicker && eventCategoryMap.has(market.eventTicker)) {
+          market.category = eventCategoryMap.get(market.eventTicker)!;
+          marketsWithCategory++;
         }
       }
+      logger.info(`Attached categories to ${marketsWithCategory}/${allMarkets.length} markets`);
 
-      logger.info(`Found ${matchingEventTickers.size} events matching categories: ${categories.slice(0, 5).join(', ')}...`);
-
-      if (matchingEventTickers.size === 0) {
-        return [];
+      // Step 4: Filter by category if specified
+      if (categoryFilter && categoryFilter.length > 0) {
+        const filtered = allMarkets.filter(m =>
+          categoryFilter.some(cat =>
+            m.category?.toLowerCase().includes(cat.toLowerCase())
+          )
+        );
+        logger.info(`Filtered to ${filtered.length} markets matching categories: ${categoryFilter.slice(0, 3).join(', ')}...`);
+        return filtered;
       }
 
-      // Debug: Show sample event tickers we're looking for
-      const sampleEventTickers = Array.from(matchingEventTickers).slice(0, 5);
-      logger.info(`Sample event tickers to match: ${sampleEventTickers.join(', ')}`);
-
-      // Step 2: Get all markets (paginated but efficient)
-      const allMarkets = await this.getMarkets('open', maxMarkets);
-
-      // Debug: Show sample market eventTickers
-      const sampleMarketEventTickers = [...new Set(allMarkets.slice(0, 20).map(m => m.eventTicker).filter(Boolean))];
-      logger.info(`Sample market eventTickers: ${sampleMarketEventTickers.length > 0 ? sampleMarketEventTickers.join(', ') : '(all empty)'}`);
-
-      // Check how many markets have eventTicker set
-      const marketsWithEventTicker = allMarkets.filter(m => m.eventTicker && m.eventTicker.length > 0);
-      logger.info(`Markets with eventTicker set: ${marketsWithEventTicker.length}/${allMarkets.length}`);
-
-      // Step 3: Filter markets by event_ticker and attach category (in memory, no API calls)
-      const filteredMarkets = allMarkets
-        .filter(m => matchingEventTickers.has(m.eventTicker))
-        .map(m => {
-          // Attach category from the event
-          const category = eventCategoryMap.get(m.eventTicker);
-          if (category) {
-            m.category = category;
-          }
-          return m;
-        });
-
-      logger.info(`Filtered to ${filteredMarkets.length} political markets from ${allMarkets.length} total (2 API calls)`);
-      return filteredMarkets;
+      return allMarkets;
     } catch (error) {
-      logger.error('Failed to get markets by categories', { error: (error as Error).message });
+      logger.error('Failed to get markets with categories', { error: (error as Error).message });
       return [];
     }
+  }
+
+  /**
+   * @deprecated Use getAllMarketsWithCategories instead (fewer API calls)
+   * Get all markets from events matching specific categories
+   * Uses event_ticker filter to get only political markets (avoids sports flood)
+   * Makes N API calls where N = number of matching events (capped at maxEvents)
+   */
+  async getMarketsByCategories(categories: string[], maxEvents: number = 50): Promise<KalshiMarket[]> {
+    // Redirect to optimized method
+    return this.getAllMarketsWithCategories(categories);
   }
 
   async getMarket(ticker: string): Promise<KalshiMarket | null> {
