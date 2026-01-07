@@ -230,12 +230,11 @@ const KALSHI_POLITICAL_CATEGORIES = [
 ];
 
 /**
- * Fetch markets from Kalshi API, focusing on political/news categories
- * Uses event-based fetching since categories are only available on events, not markets
- * @param category - Optional additional category filter
- * @param skipFiltering - If true, return all markets without category filtering (useful for debugging)
+ * Fetch markets from Kalshi API
+ * Fetches ALL markets with categories attached (no category filtering by default)
+ * @param category - Optional category filter (applied in memory after fetch)
  */
-async function fetchKalshiMarkets(category?: string, skipFiltering: boolean = false): Promise<KalshiMarket[]> {
+async function fetchKalshiMarkets(category?: string): Promise<KalshiMarket[]> {
   try {
     const connector = getKalshiConnector();
 
@@ -248,30 +247,22 @@ async function fetchKalshiMarkets(category?: string, skipFiltering: boolean = fa
       }
     }
 
-    // Skip filtering - fetch raw markets (useful for debugging)
-    if (skipFiltering) {
-      logger.info('Fetching all Kalshi markets (no category filter)...');
-      const allMarkets = await connector.getMarkets('open', 200);
-      logger.info(`Kalshi returned ${allMarkets.length} total markets`);
-      return allMarkets;
-    }
+    // Fetch ALL markets with categories (no filtering = maximum coverage)
+    // Uses optimized batch fetch: ~2-6 API calls total
+    logger.info('Fetching all Kalshi markets via optimized batch method...');
+    const markets = await connector.getAllMarketsWithCategories(); // No category filter
 
-    // Use optimized batch fetching approach
-    // This fetches ALL markets + events in ~2-6 API calls, then filters in memory
-    logger.info('Fetching Kalshi markets via optimized batch method...');
-    const markets = await connector.getAllMarketsWithCategories(KALSHI_POLITICAL_CATEGORIES);
-
-    // Additional category filter if specified
+    // Optional category filter if specified by user
     let filtered = markets;
     if (category) {
       filtered = markets.filter(m => {
-        const text = `${m.title} ${m.category}`.toLowerCase();
+        const text = `${m.title} ${m.category || ''}`.toLowerCase();
         return text.includes(category.toLowerCase());
       });
       logger.info(`Filtered to ${filtered.length} markets matching "${category}"`);
     }
 
-    logger.info(`Fetched ${filtered.length} Kalshi political markets`);
+    logger.info(`Fetched ${filtered.length} Kalshi markets total`);
     return filtered;
   } catch (error) {
     logger.error(`Failed to fetch Kalshi markets: ${(error as Error).message}`);

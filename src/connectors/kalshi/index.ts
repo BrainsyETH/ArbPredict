@@ -46,6 +46,11 @@ export class KalshiConnector implements BaseConnector {
   private wsMessageId: number = 1;
   private orderBooks: Map<string, OrderBook> = new Map();
 
+  // Caching for events (reduces API calls on repeated runs)
+  private eventsCache: Array<{ event_ticker: string; title: string; category: string; series_ticker: string }> | null = null;
+  private eventsCacheTime: Date | null = null;
+  private readonly eventsCacheTTLMs: number = 5 * 60 * 1000; // 5 minutes
+
   constructor() {
     const config = getConfig();
 
@@ -363,7 +368,16 @@ export class KalshiConnector implements BaseConnector {
     }
   }
 
-  async getEvents(seriesTicker?: string): Promise<Array<{ event_ticker: string; title: string; category: string; series_ticker: string }>> {
+  async getEvents(seriesTicker?: string, useCache: boolean = true): Promise<Array<{ event_ticker: string; title: string; category: string; series_ticker: string }>> {
+    // Check cache first (only for unfiltered requests)
+    if (useCache && !seriesTicker && this.eventsCache && this.eventsCacheTime) {
+      const cacheAge = Date.now() - this.eventsCacheTime.getTime();
+      if (cacheAge < this.eventsCacheTTLMs) {
+        logger.debug(`Using cached events (${this.eventsCache.length} events, ${Math.round(cacheAge / 1000)}s old)`);
+        return this.eventsCache;
+      }
+    }
+
     try {
       await this.readRateLimiter.waitForSlot();
       const params: Record<string, unknown> = { status: 'open' };
@@ -371,11 +385,29 @@ export class KalshiConnector implements BaseConnector {
         params.series_ticker = seriesTicker;
       }
       const response = await this.client.get<{ events: Array<{ event_ticker: string; title: string; category: string; series_ticker: string }> }>('/events', { params });
-      return response.data.events || [];
+      const events = response.data.events || [];
+
+      // Cache unfiltered results
+      if (!seriesTicker) {
+        this.eventsCache = events;
+        this.eventsCacheTime = new Date();
+        logger.debug(`Cached ${events.length} events`);
+      }
+
+      return events;
     } catch (error) {
       logger.error('Failed to get events', { error: (error as Error).message });
       return [];
     }
+  }
+
+  /**
+   * Clear the events cache (useful for forcing a refresh)
+   */
+  clearEventsCache(): void {
+    this.eventsCache = null;
+    this.eventsCacheTime = null;
+    logger.debug('Events cache cleared');
   }
 
   async getMarkets(status: 'open' | 'closed' | 'settled' = 'open', maxResults?: number, seriesTicker?: string): Promise<KalshiMarket[]> {
