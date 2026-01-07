@@ -383,13 +383,44 @@ if (process.argv[1]?.includes('auto-discover')) {
   const args = process.argv.slice(2);
   const dryRun = args.includes('--dry-run');
   const verbose = args.includes('--verbose') || args.includes('-v');
+  const preview = args.includes('--preview');
   const category = args.filter(a => !a.startsWith('--') && a !== '-v')[0] || undefined;
 
   if (verbose) {
     process.env.LOG_LEVEL = 'debug';
   }
 
-  autoDiscoverMappings({ category, dryRun })
+  if (preview) {
+    // Just show sample markets without matching
+    console.log('Fetching markets for preview...\n');
+    Promise.all([
+      fetchPolymarketMarkets(category),
+      fetchKalshiMarkets(category),
+    ]).then(([polymarkets, kalshiMarkets]) => {
+      console.log('=== POLYMARKET MARKETS ===');
+      polymarkets.slice(0, 10).forEach((m, i) => {
+        console.log(`${i + 1}. ${m.title}`);
+      });
+      console.log(`\n... and ${Math.max(0, polymarkets.length - 10)} more\n`);
+
+      console.log('=== KALSHI MARKETS ===');
+      kalshiMarkets.slice(0, 10).forEach((m, i) => {
+        console.log(`${i + 1}. ${m.title}`);
+      });
+      console.log(`\n... and ${Math.max(0, kalshiMarkets.length - 10)} more\n`);
+
+      // Show best matches for first 5 Polymarket markets
+      console.log('=== BEST POTENTIAL MATCHES ===');
+      polymarkets.slice(0, 5).forEach((pm, i) => {
+        const bestMatch = findMatchDryRun(pm, kalshiMarkets, 0.0);
+        if (bestMatch) {
+          console.log(`\n${i + 1}. Polymarket: "${pm.title.substring(0, 60)}..."`);
+          console.log(`   Best Kalshi (${(bestMatch.confidence * 100).toFixed(0)}%): "${bestMatch.kalshiTitle.substring(0, 60)}..."`);
+        }
+      });
+    }).catch(console.error);
+  } else {
+    autoDiscoverMappings({ category, dryRun })
     .then(async result => {
       console.log(`\nResults: ${result.found} found, ${result.added} added`);
       if (!dryRun) {
@@ -400,4 +431,5 @@ if (process.argv[1]?.includes('auto-discover')) {
       console.error('Auto-discovery failed:', error);
       process.exit(1);
     });
+  }
 }

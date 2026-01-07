@@ -17,7 +17,8 @@
     "db:seed": "tsx src/db/seed.ts",
     "discover": "tsx src/scripts/auto-discover.ts",
     "discover:crypto": "tsx src/scripts/auto-discover.ts crypto",
-    "discover:dry-run": "tsx src/scripts/auto-discover.ts --dry-run"
+    "discover:dry-run": "tsx src/scripts/auto-discover.ts --dry-run",
+    "discover:preview": "tsx src/scripts/auto-discover.ts --preview"
   },
   "keywords": [
     "arbitrage",
