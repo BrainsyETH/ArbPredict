@@ -82,6 +82,7 @@ export class EventMatcher {
 
   /**
    * Find Kalshi equivalent for a Polymarket event
+   * Uses best-match algorithm: evaluates all candidates and returns the highest confidence match
    */
   async findKalshiEquivalent(
     polymarket: PolymarketMarket,
@@ -94,69 +95,84 @@ export class EventMatcher {
     }
 
     const config = getConfig();
-
-    // Try to find a match
     const normalizedPolyTitle = normalize(polymarket.title);
+
+    // Track the best match across all candidates
+    let bestMatch: { kalshi: KalshiMarket; confidence: number; method: MatchMethod } | null = null;
 
     for (const kalshi of kalshiMarkets) {
       const normalizedKalshiTitle = normalize(kalshi.title);
 
-      // 1. Exact match
-      if (normalizedPolyTitle === normalizedKalshiTitle) {
-        const mapping = this.createMapping(
-          polymarket,
-          kalshi,
-          1.0,
-          'exact'
-        );
-        await this.saveMapping(mapping);
-        return mapping;
+      // Calculate similarity (1.0 for exact match)
+      const isExactMatch = normalizedPolyTitle === normalizedKalshiTitle;
+      const similarity = isExactMatch ? 1.0 : levenshteinSimilarity(normalizedPolyTitle, normalizedKalshiTitle);
+
+      // Skip if below minimum threshold
+      if (similarity < config.matching.fuzzyMatchMinSimilarity) {
+        continue;
       }
 
-      // 2. Fuzzy match
-      const similarity = levenshteinSimilarity(normalizedPolyTitle, normalizedKalshiTitle);
-
-      if (similarity >= config.matching.fuzzyMatchMinSimilarity) {
-        // Additional validation: dates must align
-        if (config.matching.requireDateValidation) {
-          const dateMatches = datesMatch(
-            polymarket.endDate,
-            kalshi.expirationTime,
-            24 * 60 * 60 * 1000 // 24 hours tolerance
-          );
-
-          if (!dateMatches) {
-            logger.debug('Fuzzy match rejected: dates do not align', {
-              polymarket: polymarket.conditionId,
-              kalshi: kalshi.ticker,
-              polyDate: polymarket.endDate,
-              kalshiDate: kalshi.expirationTime,
-            });
-            continue;
-          }
-        }
-
-        // Category validation
-        if (config.matching.requireCategoryMatch) {
-          if (!this.categoriesCompatible(polymarket.title, kalshi.category)) {
-            logger.debug('Fuzzy match rejected: categories do not match', {
-              polymarket: polymarket.conditionId,
-              kalshi: kalshi.ticker,
-              kalshiCategory: kalshi.category,
-            });
-            continue;
-          }
-        }
-
-        const mapping = this.createMapping(
-          polymarket,
-          kalshi,
-          similarity,
-          'fuzzy'
+      // Date validation (applies to both exact and fuzzy matches)
+      if (config.matching.requireDateValidation) {
+        const dateMatches = datesMatch(
+          polymarket.endDate,
+          kalshi.expirationTime,
+          24 * 60 * 60 * 1000 // 24 hours tolerance
         );
-        await this.saveMapping(mapping);
-        return mapping;
+
+        if (!dateMatches) {
+          logger.debug('Match rejected: dates do not align', {
+            polymarket: polymarket.conditionId,
+            kalshi: kalshi.ticker,
+            polyDate: polymarket.endDate,
+            kalshiDate: kalshi.expirationTime,
+            matchType: isExactMatch ? 'exact' : 'fuzzy',
+          });
+          continue;
+        }
       }
+
+      // Category validation (applies to both exact and fuzzy matches)
+      if (config.matching.requireCategoryMatch) {
+        if (!this.categoriesCompatible(polymarket.title, kalshi.category)) {
+          logger.debug('Match rejected: categories do not match', {
+            polymarket: polymarket.conditionId,
+            kalshi: kalshi.ticker,
+            kalshiCategory: kalshi.category,
+            matchType: isExactMatch ? 'exact' : 'fuzzy',
+          });
+          continue;
+        }
+      }
+
+      // Update best match if this candidate has higher confidence
+      if (!bestMatch || similarity > bestMatch.confidence) {
+        bestMatch = {
+          kalshi,
+          confidence: similarity,
+          method: isExactMatch ? 'exact' : 'fuzzy',
+        };
+
+        // Log when we find a better match
+        logger.debug('Found better match candidate', {
+          polymarket: polymarket.conditionId,
+          kalshi: kalshi.ticker,
+          confidence: similarity,
+          method: isExactMatch ? 'exact' : 'fuzzy',
+        });
+      }
+    }
+
+    // Return the best match if found
+    if (bestMatch) {
+      const mapping = this.createMapping(
+        polymarket,
+        bestMatch.kalshi,
+        bestMatch.confidence,
+        bestMatch.method
+      );
+      await this.saveMapping(mapping);
+      return mapping;
     }
 
     return null;

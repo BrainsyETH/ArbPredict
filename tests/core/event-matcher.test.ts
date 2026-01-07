@@ -109,8 +109,7 @@ describe('EventMatcher', () => {
       expect(mapping).toBeNull();
     });
 
-    it('should reject match when dates do not align', async () => {
-      // Use fuzzy matching titles (not exact) so date validation kicks in
+    it('should reject fuzzy match when dates do not align', async () => {
       // Titles differ by just one character ('s' in Bitcoins) for >0.95 similarity
       const polyMarket = createPolyMarket({
         title: 'Will Bitcoins reach 100k by end of 2025?',
@@ -123,8 +122,74 @@ describe('EventMatcher', () => {
 
       const mapping = await eventMatcher.findKalshiEquivalent(polyMarket, kalshiMarkets);
 
-      // Should be null because dates don't align (fuzzy match requires date validation)
       expect(mapping).toBeNull();
+    });
+
+    it('should reject exact match when dates do not align', async () => {
+      // Exact same title but different dates - should be rejected
+      const polyMarket = createPolyMarket({
+        title: 'Will Bitcoin reach $100k by end of 2025?',
+        endDate: new Date('2025-12-31'),
+      });
+      const kalshiMarkets = [createKalshiMarket({
+        title: 'Will Bitcoin reach $100k by end of 2025?',
+        expirationTime: new Date('2026-06-30'), // Different date - outside 24h tolerance
+      })];
+
+      const mapping = await eventMatcher.findKalshiEquivalent(polyMarket, kalshiMarkets);
+
+      // Should be null because dates don't align (exact matches now also require date validation)
+      expect(mapping).toBeNull();
+    });
+
+    it('should select best match when multiple candidates exist', async () => {
+      const polyMarket = createPolyMarket({
+        title: 'Will Bitcoin reach 100k by end of 2025?',
+      });
+
+      // Multiple Kalshi markets - one fuzzy match (0.97), one exact match (1.0)
+      const kalshiMarkets = [
+        createKalshiMarket({
+          ticker: 'BTC-FUZZY',
+          title: 'Will Bitcoins reach 100k by end of 2025?', // Fuzzy match (~0.97)
+        }),
+        createKalshiMarket({
+          ticker: 'BTC-EXACT',
+          title: 'Will Bitcoin reach 100k by end of 2025?', // Exact match (1.0)
+        }),
+      ];
+
+      const mapping = await eventMatcher.findKalshiEquivalent(polyMarket, kalshiMarkets);
+
+      // Should select the exact match (higher confidence) even though fuzzy came first
+      expect(mapping).not.toBeNull();
+      expect(mapping?.kalshiTicker).toBe('BTC-EXACT');
+      expect(mapping?.matchMethod).toBe('exact');
+      expect(mapping?.matchConfidence).toBe(1.0);
+    });
+
+    it('should select highest confidence fuzzy match among multiple candidates', async () => {
+      const polyMarket = createPolyMarket({
+        title: 'Will Bitcoin reach 100k by end of 2025?',
+      });
+
+      // Multiple fuzzy matches with different similarities
+      const kalshiMarkets = [
+        createKalshiMarket({
+          ticker: 'BTC-LOW',
+          title: 'Will Bitcoins reach 100k by end of 2025?', // Lower similarity (~0.97)
+        }),
+        createKalshiMarket({
+          ticker: 'BTC-HIGH',
+          title: 'Will Bitcoin reach 100k by end of 2025', // Higher similarity (~0.98, missing ?)
+        }),
+      ];
+
+      const mapping = await eventMatcher.findKalshiEquivalent(polyMarket, kalshiMarkets);
+
+      // Should select the higher confidence match
+      expect(mapping).not.toBeNull();
+      expect(mapping?.kalshiTicker).toBe('BTC-HIGH');
     });
 
     it('should return null when no markets match', async () => {
