@@ -39,8 +39,10 @@ interface PolymarketApiResponse {
  */
 async function fetchPolymarketMarkets(category?: string): Promise<PolymarketMarket[]> {
   try {
+    logger.info('Fetching Polymarket markets...');
+
     // Try the Gamma Markets API first (more data)
-    let response = await axios.get<PolymarketApiResponse | PolymarketApiMarket[]>(
+    const response = await axios.get<PolymarketApiResponse | PolymarketApiMarket[]>(
       'https://gamma-api.polymarket.com/markets',
       {
         params: {
@@ -52,26 +54,43 @@ async function fetchPolymarketMarkets(category?: string): Promise<PolymarketMark
       }
     );
 
+    logger.debug(`Gamma API response type: ${typeof response.data}, isArray: ${Array.isArray(response.data)}`);
+
     // Handle different response structures
     let rawMarkets: PolymarketApiMarket[];
 
     if (Array.isArray(response.data)) {
       rawMarkets = response.data;
-    } else if (response.data.data) {
-      rawMarkets = response.data.data;
-    } else if (response.data.markets) {
-      rawMarkets = response.data.markets;
-    } else {
-      // Fallback to CLOB API
-      logger.debug('Gamma API response unexpected, trying CLOB API');
-      const clobResponse = await axios.get<PolymarketApiMarket[]>(
-        'https://clob.polymarket.com/markets',
-        {
-          params: { limit: 100 },
-          timeout: 30000,
+      logger.debug(`Response is array with ${rawMarkets.length} items`);
+    } else if (response.data && typeof response.data === 'object') {
+      // Log the keys to see structure
+      logger.debug(`Response keys: ${Object.keys(response.data).join(', ')}`);
+
+      if ('data' in response.data && Array.isArray(response.data.data)) {
+        rawMarkets = response.data.data;
+      } else if ('markets' in response.data && Array.isArray(response.data.markets)) {
+        rawMarkets = response.data.markets;
+      } else {
+        // Try to extract any array from the response
+        const possibleArrays = Object.values(response.data).filter(v => Array.isArray(v));
+        if (possibleArrays.length > 0) {
+          rawMarkets = possibleArrays[0] as PolymarketApiMarket[];
+          logger.debug(`Found array in response with ${rawMarkets.length} items`);
+        } else {
+          logger.warn('Could not find markets array in Gamma API response');
+          rawMarkets = [];
         }
-      );
-      rawMarkets = Array.isArray(clobResponse.data) ? clobResponse.data : [];
+      }
+    } else {
+      logger.warn(`Unexpected Gamma API response type: ${typeof response.data}`);
+      rawMarkets = [];
+    }
+
+    logger.info(`Gamma API returned ${rawMarkets.length} raw markets`);
+
+    // Log first market for debugging
+    if (rawMarkets.length > 0) {
+      logger.debug(`Sample market keys: ${Object.keys(rawMarkets[0]).join(', ')}`);
     }
 
     const markets: PolymarketMarket[] = rawMarkets
@@ -155,7 +174,9 @@ async function fetchKalshiMarkets(category?: string): Promise<KalshiMarket[]> {
       }
     }
 
+    logger.info('Fetching Kalshi markets (this may take a moment)...');
     const markets = await connector.getMarkets('open');
+    logger.info(`Kalshi returned ${markets.length} total markets`);
 
     // Filter by category if specified
     const filtered = category
@@ -165,7 +186,7 @@ async function fetchKalshiMarkets(category?: string): Promise<KalshiMarket[]> {
         })
       : markets;
 
-    logger.info(`Fetched ${filtered.length} Kalshi markets`);
+    logger.info(`Fetched ${filtered.length} Kalshi markets${category ? ` matching "${category}"` : ''}`);
     return filtered;
   } catch (error) {
     logger.error(`Failed to fetch Kalshi markets: ${(error as Error).message}`);
